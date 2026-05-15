@@ -74,10 +74,17 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
         try {
           fileWriteStream = fs.createWriteStream(destPath, { flags: fileOpenMode });
         } catch (e2) {
-          // EPERM — stale locked file, delete and retry
+          // EPERM — stale locked file, wait+retry (Windows Defender race)
           if (e2.code === 'EPERM' || e2.code === 'EACCES') {
-            try { fs.unlinkSync(destPath); } catch {}
-            fileWriteStream = fs.createWriteStream(destPath, { flags: 'w' });
+            const _sb = new SharedArrayBuffer(4);
+            const _ia = new Int32Array(_sb);
+            let retried = false;
+            for (let w = 0; w < 5; w++) {
+              try { fs.unlinkSync(destPath); } catch {}
+              try { Atomics.wait(_ia, 0, 0, 500); } catch {}
+              try { fileWriteStream = fs.createWriteStream(destPath, { flags: 'w' }); retried = true; break; } catch {}
+            }
+            if (!retried) throw e2;
           } else {
             throw e2;
           }

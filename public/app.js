@@ -2,6 +2,8 @@
 let items = {};
 let settings = {};
 let statusInfo = {};
+let clipboardCaptureEnabled = false;
+let autoDownloadEnabled = false;
 
 // DOM refs
 const $ = (s) => document.querySelector(s);
@@ -15,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
   connectSSE();
   setupEnterKey();
   setupSaveModeToggle();
+  setupClipboardToggles();
   startHealthCheck();
 });
 
@@ -25,6 +28,36 @@ function setupSaveModeToggle() {
       settings.saveMode = this.checked ? 'manual' : 'auto';
       saveSettings();
     });
+  }
+}
+function setupClipboardToggles() {
+  const captureToggle = $('#setting-clipboard-capture');
+  const autoDlToggle = $('#setting-auto-download');
+  if (captureToggle) {
+    captureToggle.addEventListener('change', function() {
+      clipboardCaptureEnabled = this.checked;
+      if (!clipboardCaptureEnabled && autoDlToggle) autoDlToggle.checked = false;
+      saveSettings();
+    });
+  }
+  if (autoDlToggle) {
+    autoDlToggle.addEventListener('change', function() {
+      autoDownloadEnabled = this.checked;
+      saveSettings();
+    });
+  }
+}
+
+function handleCapturedLink(url) {
+  const cleanUrl = url.replace(/[,.!?;:)\]}>"'$]+$/, '').replace(/^["'(<]+/, '');
+  const textarea = $('#url-input');
+  if (textarea) {
+    textarea.value = cleanUrl;
+    textarea.style.borderColor = '#2ea043';
+    setTimeout(() => textarea.style.borderColor = '', 2000);
+  }
+  if (autoDownloadEnabled) {
+    setTimeout(() => addUrls(), 300);
   }
 }
 let _es = null;
@@ -118,14 +151,27 @@ function connectSSE() {
     renderQueue(); // Re-render to update buttons based on save mode
   });
 
+  _es.addEventListener('clipboard_captured', (e) => {
+    const data = JSON.parse(e.data);
+    if (data.url) handleCapturedLink(data.url);
+  });
+
   _es.onerror = () => {
-    // EventSource auto-reconnects — refresh state when it comes back
+    // Increment health fail on SSE error — server might be paused
+    healthFailCount++;
   };
 
   _es.onopen = () => {
-    // SSE reconnected — refresh queue in case we missed updates
-    fetchQueue();
-    fetchStatus();
+    // SSE connected = server alive, reset health counter
+    healthFailCount = 0;
+    if (!serverOnline) {
+      serverOnline = true;
+      updateStatusBar();
+      hideDisconnectBanner();
+      fetchQueue();
+      fetchStatus();
+      fetchSettings();
+    }
   };
 }
 
@@ -449,6 +495,20 @@ function updateSettingsForm() {
     $('#setting-save-mode').checked = settings.saveMode === 'manual';
   }
 
+  // Clipboard toggles — only sync from server if server knows about them
+  if ('clipboardCapture' in settings && settings.clipboardCapture !== undefined) {
+    if ($('#setting-clipboard-capture')) $('#setting-clipboard-capture').checked = !!settings.clipboardCapture;
+    clipboardCaptureEnabled = !!settings.clipboardCapture;
+  } else {
+    clipboardCaptureEnabled = $('#setting-clipboard-capture') ? $('#setting-clipboard-capture').checked : false;
+  }
+  if ('autoDownload' in settings && settings.autoDownload !== undefined) {
+    if ($('#setting-auto-download')) $('#setting-auto-download').checked = !!settings.autoDownload;
+    autoDownloadEnabled = !!settings.autoDownload;
+  } else {
+    autoDownloadEnabled = $('#setting-auto-download') ? $('#setting-auto-download').checked : false;
+  }
+
   // Dir hint
   const hint = $('#dir-hint');
   if (hint) hint.textContent = '当前: ' + (settings.downloadDir || '');
@@ -456,9 +516,13 @@ function updateSettingsForm() {
 
 function saveSettings() {
   const saveModeChecked = $('#setting-save-mode') ? $('#setting-save-mode').checked : false;
+  const captureChecked = $('#setting-clipboard-capture') ? $('#setting-clipboard-capture').checked : false;
+  const autoChecked = $('#setting-auto-download') ? $('#setting-auto-download').checked : false;
   const dirValue = $('#setting-dir') ? $('#setting-dir').value.trim() : '';
   const body = {
     saveMode: saveModeChecked ? 'manual' : 'auto',
+    clipboardCapture: captureChecked,
+    autoDownload: autoChecked,
     customDir: dirValue || '',
     useCustomDir: !!dirValue,
     maxConcurrent: parseInt($('#setting-concurrent').value, 10) || 3,
@@ -488,6 +552,14 @@ function restartBrowser() {
     });
 }
 
+function openDownloadDir() {
+  fetch('/api/open-dir', { method: 'POST' })
+    .then(r => {
+      if (!r.ok) console.warn('打开目录接口不可用 (旧版本服务端)');
+    })
+    .catch(e => console.error('打开目录失败:', e));
+}
+
 // ---------- Utils ----------
 function fetchStatus() {
   fetch('/api/status')
@@ -510,7 +582,7 @@ function fetchQueue() {
     });
 }
 
-// Health check — detect server disconnect (3 strikes = disconnected)
+// Health check — detect server disconnect (10 strikes ≈ 30s = disconnected)
 let serverOnline = true;
 let healthFailCount = 0;
 function startHealthCheck() {
@@ -519,20 +591,10 @@ function startHealthCheck() {
       .then(r => {
         if (!r.ok) throw new Error(r.status);
         healthFailCount = 0;
-        if (!serverOnline) {
-          serverOnline = true;
-          updateStatusBar();
-          hideDisconnectBanner();
-          // Server came back — refresh full state
-          fetchQueue();
-          fetchStatus();
-          fetchSettings();
-          connectSSE();
-        }
       })
       .catch(() => {
         healthFailCount++;
-        if (healthFailCount >= 3 && serverOnline) {
+        if (healthFailCount >= 10 && serverOnline) {
           serverOnline = false;
           updateStatusBar();
           showDisconnectBanner();

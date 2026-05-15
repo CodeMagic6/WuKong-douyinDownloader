@@ -13,6 +13,8 @@ module.exports = {
   customDownloadDir: '',
   useCustomDir: false,
   saveMode: 'auto', // 'auto' = 静默保存到目录 | 'manual' = 弹窗选路径
+  clipboardCapture: false,
+  autoDownload: false,
   cookieFile: path.join(os.homedir(), '.claude', 'douyin_cookies.json'),
   maxConcurrent: 3,
   maxRetries: 3,

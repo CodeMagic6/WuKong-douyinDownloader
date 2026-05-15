@@ -11,9 +11,54 @@ try { execSync('reg add HKCU\\Console /v QuickEdit /t REG_DWORD /d 0 /f', { stdi
 const { initBrowser, closeBrowser, restartBrowser, getPage } = require('./src/browser');
 const { closeApiPage } = require('./src/video-api');
 const { checkLogin } = require('./src/cookie-manager');
+const ClipboardWatcher = require('./src/clipboard-watcher');
 
 const app = express();
 app.use(express.json());
+
+// Persisted settings file
+const settingsFile = path.join(process.cwd(), 'settings.json');
+function loadSettings() {
+  try {
+    const raw = fs.readFileSync(settingsFile, 'utf-8');
+    const saved = JSON.parse(raw);
+    if (typeof saved.clipboardCapture === 'boolean') config.clipboardCapture = saved.clipboardCapture;
+    if (typeof saved.autoDownload === 'boolean') config.autoDownload = saved.autoDownload;
+    if (saved.saveMode === 'auto' || saved.saveMode === 'manual') config.saveMode = saved.saveMode;
+    if (typeof saved.useCustomDir === 'boolean') config.useCustomDir = saved.useCustomDir;
+    if (saved.customDir) {
+      config.customDownloadDir = path.resolve(saved.customDir);
+      if (config.useCustomDir) config.downloadDir = config.customDownloadDir;
+    }
+    if (typeof saved.maxConcurrent === 'number') config.maxConcurrent = saved.maxConcurrent;
+    if (typeof saved.browserHeadless === 'boolean') config.browserHeadless = saved.browserHeadless;
+  } catch {}
+}
+function saveSettingsToFile() {
+  try {
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      clipboardCapture: config.clipboardCapture,
+      autoDownload: config.autoDownload,
+      saveMode: config.saveMode,
+      useCustomDir: config.useCustomDir,
+      customDir: config.customDownloadDir,
+      maxConcurrent: config.maxConcurrent,
+      browserHeadless: config.browserHeadless
+    }, null, 2), 'utf-8');
+  } catch {}
+}
+loadSettings();
+
+// Disable caching for frontend files so updates take effect immediately
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path === '/app.js' || req.path === '/styles.css') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  next();
+});
+
 const staticDir = typeof process.pkg !== 'undefined'
   ? path.join(path.dirname(process.execPath), 'public')
   : path.join(__dirname, 'public');
@@ -22,6 +67,17 @@ app.use(express.static(staticDir));
 // Init SSE + Queue
 const sse = new SSEBroadcaster();
 const queue = new QueueManager(config.maxConcurrent, sse);
+const clipboardWatcher = new ClipboardWatcher();
+syncClipboardWatcher();
+
+// Start/stop clipboard watcher based on config
+function syncClipboardWatcher() {
+  if (config.clipboardCapture) {
+    clipboardWatcher.start(config, queue, sse);
+  } else {
+    clipboardWatcher.stop();
+  }
+}
 
 let browserReady = false;
 let cookieValid = false;
@@ -134,13 +190,15 @@ app.get('/api/settings', (req, res) => {
     customDir: config.customDownloadDir,
     useCustomDir: config.useCustomDir,
     saveMode: config.saveMode,
+    clipboardCapture: config.clipboardCapture,
+    autoDownload: config.autoDownload,
     maxConcurrent: config.maxConcurrent,
     browserHeadless: config.browserHeadless
   });
 });
 
 app.put('/api/settings', (req, res) => {
-  const { customDir, useCustomDir, saveMode, maxConcurrent, browserHeadless } = req.body;
+  const { customDir, useCustomDir, saveMode, clipboardCapture, autoDownload, maxConcurrent, browserHeadless } = req.body;
 
   if (typeof useCustomDir === 'boolean') {
     config.useCustomDir = useCustomDir;
@@ -169,12 +227,22 @@ app.put('/api/settings', (req, res) => {
   if (typeof browserHeadless === 'boolean') {
     config.browserHeadless = browserHeadless;
   }
+  if (typeof clipboardCapture === 'boolean') {
+    config.clipboardCapture = clipboardCapture;
+  }
+  if (typeof autoDownload === 'boolean') {
+    config.autoDownload = autoDownload;
+  }
+  saveSettingsToFile();
+  syncClipboardWatcher();
   sse.broadcast('settings_updated', {
     downloadDir: config.downloadDir,
     defaultDir: config.defaultDownloadDir,
     customDir: config.customDownloadDir,
     useCustomDir: config.useCustomDir,
     saveMode: config.saveMode,
+    clipboardCapture: config.clipboardCapture,
+    autoDownload: config.autoDownload,
     maxConcurrent: config.maxConcurrent
   });
   res.json({ success: true });
@@ -193,6 +261,18 @@ app.post('/api/browser/restart', async (req, res) => {
       cookieValid = false;
     }
     sse.broadcast('status_update', { browserReady, cookieValid });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Open download directory in explorer
+app.post('/api/open-dir', (req, res) => {
+  const dir = config.downloadDir;
+  try {
+    const { execSync } = require('child_process');
+    execSync(`explorer "${dir}"`, { timeout: 3000 });
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

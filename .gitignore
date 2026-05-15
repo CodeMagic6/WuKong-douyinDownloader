@@ -6,3 +6,4 @@ downloads/
 douyin_cookies*.json
 queue_*.json
 .env
+settings.json
