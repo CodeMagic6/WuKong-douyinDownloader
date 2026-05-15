@@ -4,13 +4,21 @@
 
 ## 快速上手
 
-### 1. 下载程序
+### 1. 下载项目
 
-从 [GitHub Releases](https://github.com/CodeMagic6/WuKong-douyinDownloader/releases) 下载最新版 `douyin-downloader.exe`
+```bash
+git clone https://github.com/CodeMagic6/WuKong-douyinDownloader.git
+cd WuKong-douyinDownloader
+npm install
+```
 
 ### 2. 运行程序
 
-将 `douyin-downloader.exe` 放到任意目录，双击 `启动.exe.bat` 运行。浏览器自动打开 http://localhost:3000
+```bash
+node server.js
+```
+
+浏览器自动打开 http://localhost:3000
 
 ### 3. 扫码登录
 
