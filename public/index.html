@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抖音视频下载器</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="app">
+  <!-- Status Bar -->
+  <header id="status-bar">
+    <div class="status-left">
+      <span class="logo">🎬 抖音下载</span>
+      <span class="status-item" id="status-browser">浏览器: --</span>
+      <span class="status-item" id="status-cookie">登录: --</span>
+      <span class="status-item" id="status-queue">队列: 0</span>
+    </div>
+    <div class="status-right">
+      <span class="status-item" id="status-health">服务器: --</span>
+      <span class="status-item" id="status-today">今日: 0</span>
+    </div>
+  </header>
+
+  <!-- URL Input Area -->
+  <section id="input-area">
+    <div class="input-row">
+      <textarea id="url-input" placeholder="粘贴抖音视频链接，每行一个&#10;支持格式:&#10;https://www.douyin.com/video/xxx&#10;https://www.douyin.com/user/self?modal_id=xxx&#10;https://v.douyin.com/xxx/" rows="3"></textarea>
+      <button id="btn-add" onclick="addUrls()">添加下载</button>
+    </div>
+  </section>
+
+  <!-- Download Queue -->
+  <section id="queue-section">
+    <div class="section-header">
+      <h2>下载队列</h2>
+      <div class="queue-actions">
+        <button class="btn-sm" onclick="clearCompleted()">清除已完成</button>
+        <button class="btn-sm" onclick="clearAll()">清除全部</button>
+        <span class="queue-count" id="queue-count">0 项</span>
+      </div>
+    </div>
+    <div id="queue-list">
+      <div class="empty-queue">暂无下载任务，在上方粘贴链接开始下载</div>
+    </div>
+  </section>
+
+  <!-- Settings Panel -->
+  <section id="settings-section">
+    <div class="section-header" onclick="toggleSettings()">
+      <h2>设置 <span id="settings-arrow">▶</span></h2>
+    </div>
+    <div id="settings-panel" class="hidden">
+      <div class="settings-grid">
+        <div class="setting-item full-width">
+          <label>保存方式</label>
+          <div class="dir-toggle-row">
+            <span class="toggle-label">自动保存</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="setting-save-mode">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">手动保存</span>
+          </div>
+          <div id="save-mode-hint" class="setting-hint">
+            自动: 视频直接保存到服务器目录，无需确认<br>
+            手动: 每个视频下载完成后弹出"另存为"对话框
+          </div>
+        </div>
+        <div class="setting-item full-width">
+          <label>下载目录</label>
+          <div class="custom-dir-row">
+            <input type="text" id="setting-dir" placeholder="留空使用默认目录 (downloads/)">
+            <button class="btn-sm" onclick="saveSettings()">应用</button>
+          </div>
+          <div class="setting-hint" id="dir-hint">当前: D:\ClaudeCode项目\抖音下载\downloads\</div>
+        </div>
+        <div class="setting-item">
+          <label>最大并发数</label>
+          <input type="number" id="setting-concurrent" min="1" max="10" value="3">
+        </div>
+        <div class="setting-item">
+          <label>浏览器模式</label>
+          <select id="setting-browser">
+            <option value="true">无头模式</option>
+            <option value="false">有头模式</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>&nbsp;</label>
+          <button class="btn-sm" onclick="restartBrowser()">重启浏览器</button>
+        </div>
+      </div>
+      <div class="setting-actions">
+        <button class="btn-sm" onclick="saveSettings()">保存设置</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "douyin-video-downloader",
+  "version": "1.0.0",
+  "description": "抖音视频下载器 - Douyin Video Downloader",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "node build.js"
+  },
+  "bin": "server.js",
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "node_modules/playwright-core/browsers.json",
+      "node_modules/playwright-core/lib/**/*.json",
+      "node_modules/playwright-core/lib/**/*.node"
+    ],
+    "outputPath": "dist"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "playwright": "^1.60.0"
+  }
+}

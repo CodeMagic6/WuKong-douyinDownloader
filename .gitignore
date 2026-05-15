@@ -1,0 +1,8 @@
+node_modules/
+dist/
+downloads/
+*.log
+.claude/
+douyin_cookies*.json
+queue_*.json
+.env
