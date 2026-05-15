@@ -4,11 +4,15 @@
 
 ## 快速上手
 
-### 1. 运行程序
+### 1. 下载程序
 
-双击 `启动.exe.bat` 运行，浏览器自动打开 http://localhost:3000
+从 [GitHub Releases](https://github.com/CodeMagic6/WuKong-douyinDownloader/releases) 下载最新版 `douyin-downloader.exe`
 
-### 2. 扫码登录
+### 2. 运行程序
+
+将 `douyin-downloader.exe` 放到任意目录，双击 `启动.exe.bat` 运行。浏览器自动打开 http://localhost:3000
+
+### 3. 扫码登录
 
 工具需要登录才能下载。
 
@@ -19,7 +23,7 @@
 
 > 下次使用无需重复登录，Cookie 自动保存。
 
-### 3. 下载视频
+### 4. 下载视频
 
 **手动粘贴**: 复制抖音视频链接，粘贴到输入框，点击"添加下载"
 
