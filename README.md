@@ -1,56 +1,74 @@
-# 抖音视频下载器
+# WuKong 抖音下载
 
-基于 Node.js + Playwright 的抖音视频下载工具，提供 Web UI 管理下载队列。
+开箱即用的抖音视频下载工具。粘贴链接自动下载，支持合集批量提取。
 
-## 功能
+## 快速上手
 
-- 粘贴抖音视频/合集链接，自动下载 MP4
-- 合集批量提取（自动翻页扫描全部视频）
-- 实时下载进度（速度、ETA、百分比）
-- 并发控制（可调 1-10）
-- 断点续传
-- 自动重试 + CDN URL 过期刷新
-- 支持自动保存或手动弹窗选择路径
-- 无头浏览器模式
+### 下载 exe
 
-## 快速开始
+[Releases](https://github.com/CodeMagic6/WuKong-douyinDownloader/releases) 页面下载最新 `douyin-downloader.exe`，双击 `启动.exe.bat` 运行。
 
-### 前置要求
+浏览器自动打开 http://localhost:3000
 
-- [Node.js](https://nodejs.org/) >= 18
-- Chromium（首次启动自动安装）
+### 登录抖音
 
-### 安装
+工具需要抖音登录态才能下载。
+
+1. 浏览器打开 https://www.douyin.com
+2. 扫码或手机号登录
+3. 回到本工具页面，顶部状态栏显示 **登录: 已登录** 即完成
+
+> 首次使用按提示自动跳转抖音登录，之后 Cookie 自动保存无需重复操作。
+
+### 下载视频
+
+**方式一：手动粘贴**
+- 复制抖音视频链接，粘贴到输入框，点"添加下载"
+
+**方式二：自动捕获 🔥**
+- 设置面板开启 **剪贴板捕获**
+- 任意页面复制抖音链接 → 自动填入地址栏
+- 开启 **自动下载** → 复制即下载，无需操作页面
+
+**方式三：右键菜单**
+- 在抖音页面右键复制视频链接，工具自动识别
+
+## 功能一览
+
+| 功能 | 说明 |
+|------|------|
+| 单视频下载 | 粘贴链接自动下 |
+| 合集批量下载 | 自动翻页扫描全部视频 |
+| 剪贴板捕获 | 复制链接自动识别 |
+| 实时进度 | 速度、ETA、百分比 |
+| 并发控制 | 同时下 1-10 个 |
+| 断点续传 | 中断后继续 |
+| 自动重试 | CDN 过期自动刷新 |
+| 下载目录 | 自定义保存位置 |
+
+## 常见问题
+
+**Q: 页面显示"未登录"？**  
+重新打开抖音网页版登录，或清除浏览器缓存后重试。
+
+**Q: 下载失败/网络错误？**  
+检查网络，或重启工具。工具会自动重试。
+
+**Q: 服务断开连接？**  
+Windows 下点击控制台窗口会暂停进程。不要点击后台窗口，或用 `启动.exe.bat`（隐藏窗口）启动。
+
+**Q: 什么是合集链接？**  
+抖音用户主页、作品列表、收藏夹等页面链接，工具自动扫描提取全部视频。
+
+## 开发者
+
+### 从源码运行
 
 ```bash
+git clone https://github.com/CodeMagic6/WuKong-douyinDownloader.git
 npm install
-```
-
-### 获取 Cookie
-
-工具需要抖音登录态才能调用 API。获取方式：
-
-1. 浏览器登录抖音网页版 (https://www.douyin.com)
-2. 打开开发者工具 (F12) → Application → Cookies → `douyin.com`
-3. 找到 `sessionid` 和 `sessionid_ss`，导出为 JSON
-4. 保存到 `~/.claude/douyin_cookies.json`
-
-或者用 Chrome 插件 [EditThisCookie](https://chromewebstore.google.com/detail/editthiscookie/） 导出格式为：
-
-```json
-[
-  { "name": "sessionid", "value": "xxx", "domain": ".douyin.com", "path": "/" },
-  { "name": "sessionid_ss", "value": "xxx", "domain": ".douyin.com", "path": "/" }
-]
-```
-
-### 启动
-
-```bash
 node server.js
 ```
-
-打开 http://localhost:3000
 
 ### 构建 exe
 
@@ -58,39 +76,19 @@ node server.js
 node build.js
 ```
 
-输出在 `dist/` 目录，双击 `启动.exe.bat` 运行。
+输出在 `dist/`，双击 `启动.exe.bat`。
 
-## 配置
+### 配置
 
 编辑 `config.js`：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | port | 3000 | 服务端口 |
-| maxConcurrent | 3 | 最大并发下载数 |
+| maxConcurrent | 3 | 最大并发下载 |
 | browserHeadless | true | 无头浏览器模式 |
-| saveMode | auto | auto=自动保存到目录 / manual=弹窗选择 |
-
-## 项目结构
-
-```
-├── server.js              # Express 服务入口
-├── config.js              # 配置文件
-├── build.js               # exe 构建脚本
-├── src/
-│   ├── browser.js         # Playwright 浏览器单例
-│   ├── cookie-manager.js  # Cookie 加载/保存
-│   ├── video-api.js       # 抖音 API 调用
-│   ├── download-engine.js # HTTP 流式下载
-│   ├── queue-manager.js   # 下载队列控制
-│   ├── collection-extractor.js # 合集提取
-│   ├── url-utils.js       # URL 解析
-│   ├── filename-utils.js  # 文件名生成
-│   └── sse.js             # SSE 实时推送
-├── public/                # Web UI 静态文件
-└── downloads/             # 默认下载目录
-```
+| saveMode | auto | 自动保存/手动选择路径 |
 
 ## 免责声明
 
-本项目仅供学习和个人使用。下载的视频请尊重原作者版权，勿用于商业用途或传播。使用者需自行承担所有法律责任。
+仅供学习与个人使用。下载内容版权归原作者所有，请勿用于商业用途或传播。
