@@ -435,6 +435,100 @@ body {
 .badge-fail { background: #da363320; color: #f85149; border: 1px solid #da363340; }
 .badge-warn { background: #d2992220; color: #d29922; border: 1px solid #d2992240; }
 
+/* Login Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-overlay.hidden { display: none; }
+
+.modal-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 16px 20px 0;
+}
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #f0f6fc;
+}
+
+.modal-body {
+  padding: 20px;
+  text-align: center;
+}
+
+.modal-loading {
+  margin: 12px auto 16px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  border: 3px solid #30363d;
+  border-top-color: #58a6ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#login-status-text {
+  font-size: 14px;
+  color: #c9d1d9;
+  margin-bottom: 12px;
+}
+
+.modal-hint {
+  font-size: 13px;
+  color: #8b949e;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+.modal-tip {
+  font-size: 12px;
+  color: #484f58;
+  line-height: 1.5;
+}
+
+.modal-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #21262d;
+  text-align: right;
+}
+
+/* Login button in status bar */
+#status-cookie {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+#status-cookie:hover {
+  background: #21262d;
+}
+
+/* Login success checkmark */
+.login-success-icon {
+  color: #3fb950;
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
   .input-row { flex-direction: column; }

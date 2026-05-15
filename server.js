@@ -104,7 +104,107 @@ process.on('unhandledRejection', (e) => {
   console.error('未捕获 Promise 异常 (服务器继续运行):', e.message);
 });
 
-// ---------- Routes ----------
+// ---------- Login flow ----------
+let loginInProgress = false;
+
+async function startLoginFlow() {
+  if (loginInProgress) return;
+  loginInProgress = true;
+
+  let loginBrowser = null;
+  let loginContext = null;
+  let loginPage = null;
+
+  try {
+    sse.broadcast('login_progress', { status: 'starting' });
+
+    const playwright = require('playwright');
+    const { chromium } = playwright;
+    const { saveCookies, loadCookies } = require('./src/cookie-manager');
+
+    loginBrowser = await chromium.launch({
+      headless: false,
+      args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
+    });
+
+    loginContext = await loginBrowser.newContext({
+      viewport: { width: 1440, height: 900 },
+      userAgent: config.userAgent,
+      locale: 'zh-CN'
+    });
+
+    loginPage = await loginContext.newPage();
+
+    sse.broadcast('login_progress', { status: 'waiting' });
+
+    await loginPage.goto('https://www.douyin.com/', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    }).catch(() => {});
+
+    // Poll for sessionid cookie (3 min timeout)
+    const pollInterval = 1000;
+    const maxAttempts = 180;
+    let loggedIn = false;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, pollInterval));
+      try {
+        const cookies = await loginContext.cookies();
+        const hasSession = cookies.some(c => c.name === 'sessionid' || c.name === 'sessionid_ss');
+        if (hasSession) {
+          loggedIn = true;
+          break;
+        }
+      } catch {}
+    }
+
+    if (loggedIn) {
+      // Save cookies to file
+      await saveCookies(loginContext, config.cookieFile);
+
+      // Update main browser context with new cookies
+      try {
+        const { getContext } = require('./src/browser');
+        const mainContext = await getContext();
+        if (mainContext) {
+          const cookies = await loginContext.cookies();
+          await mainContext.addCookies(cookies);
+        }
+      } catch {}
+
+      sse.broadcast('login_progress', { status: 'success' });
+      sse.broadcast('status_update', { cookieValid: true });
+      console.log('扫码登录成功');
+    } else {
+      sse.broadcast('login_progress', { status: 'timeout' });
+      console.log('扫码登录超时');
+    }
+  } catch (e) {
+    console.error('扫码登录失败:', e.message);
+    sse.broadcast('login_progress', { status: 'error', error: e.message });
+  } finally {
+    if (loginPage) await loginPage.close().catch(() => {});
+    if (loginBrowser) await loginBrowser.close().catch(() => {});
+    loginInProgress = false;
+  }
+}
+
+app.post('/api/login', (req, res) => {
+  if (loginInProgress) return res.json({ status: 'in_progress' });
+  // Don't await — run in background
+  startLoginFlow();
+  res.json({ status: 'started' });
+});
+
+app.post('/api/login/cancel', (req, res) => {
+  // Endpoint for frontend to acknowledge timeout/error and reset state
+  if (loginInProgress) {
+    loginInProgress = false;
+  }
+  res.json({ status: 'cancelled' });
+});
+// ---------- End login flow ----------
 
 // Ping (health check)
 app.get('/api/ping', (req, res) => res.json({ ok: true }));

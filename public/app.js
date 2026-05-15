@@ -4,6 +4,7 @@ let settings = {};
 let statusInfo = {};
 let clipboardCaptureEnabled = false;
 let autoDownloadEnabled = false;
+let loginModalOpen = false;
 
 // DOM refs
 const $ = (s) => document.querySelector(s);
@@ -18,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEnterKey();
   setupSaveModeToggle();
   setupClipboardToggles();
+  setupLoginClick();
   startHealthCheck();
 });
 
@@ -144,6 +146,11 @@ function connectSSE() {
     updateStatusBar();
   });
 
+  _es.addEventListener('login_progress', (e) => {
+    const data = JSON.parse(e.data);
+    handleLoginProgress(data);
+  });
+
   _es.addEventListener('settings_updated', (e) => {
     const data = JSON.parse(e.data);
     Object.assign(settings, data);
@@ -188,7 +195,7 @@ function updateStatusBar() {
 
   cookie.innerHTML = `登录: ${statusInfo.cookieValid
     ? '<span class="badge badge-ok">已登录</span>'
-    : '<span class="badge badge-warn">未登录</span>'}`;
+    : '<span class="badge badge-warn">未登录 → 扫码登录</span>'}`;
 
   queue.textContent = `队列: ${statusInfo.queueLength || 0}`;
   today.textContent = `今日: ${statusInfo.downloadsToday || 0}`;
@@ -628,6 +635,102 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ---------- Login ----------
+function setupLoginClick() {
+  const cookieEl = $('#status-cookie');
+  if (cookieEl) {
+    cookieEl.addEventListener('click', () => {
+      if (!statusInfo.cookieValid) {
+        startLogin();
+      }
+    });
+  }
+}
+
+function startLogin() {
+  if (loginModalOpen) return;
+  loginModalOpen = true;
+
+  const modal = $('#login-modal');
+  const statusText = $('#login-status-text');
+  const loading = $('#login-loading');
+  const cancelBtn = $('#btn-login-cancel');
+
+  if (!modal) return;
+
+  // Reset modal state
+  modal.classList.remove('hidden');
+  if (loading) loading.innerHTML = '<div class="spinner"></div>';
+  if (statusText) statusText.textContent = '正在打开浏览器窗口...';
+  if (statusText) statusText.style.color = '#c9d1d9';
+  if (cancelBtn) cancelBtn.textContent = '取消';
+
+  fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.status === 'in_progress') {
+      if (statusText) statusText.textContent = '登录窗口已打开，请在浏览器中扫码...';
+    }
+  })
+  .catch(e => {
+    if (statusText) statusText.textContent = '启动登录失败: ' + e.message;
+    if (loading) loading.innerHTML = '<div class="login-success-icon" style="color:#f85149">✕</div>';
+  });
+}
+
+function handleLoginProgress(data) {
+  const statusText = $('#login-status-text');
+  const loading = $('#login-loading');
+  const cancelBtn = $('#btn-login-cancel');
+
+  if (!statusText) return;
+
+  switch (data.status) {
+    case 'starting':
+      statusText.textContent = '正在打开浏览器窗口...';
+      break;
+    case 'waiting':
+      statusText.textContent = '请在打开的浏览器窗口中扫码登录';
+      if (cancelBtn) cancelBtn.textContent = '关闭';
+      break;
+    case 'success':
+      if (loading) loading.innerHTML = '<div class="login-success-icon">✓</div>';
+      statusText.textContent = '登录成功！';
+      statusText.style.color = '#3fb950';
+      if (cancelBtn) cancelBtn.textContent = '完成';
+      // Update status bar immediately
+      statusInfo.cookieValid = true;
+      updateStatusBar();
+      // Close modal after 2s
+      setTimeout(() => closeLoginModal(), 2000);
+      break;
+    case 'timeout':
+      if (loading) loading.innerHTML = '<div class="login-success-icon" style="color:#d29922">⏱</div>';
+      statusText.textContent = '扫码超时 (3分钟)，请重试';
+      statusText.style.color = '#d29922';
+      if (cancelBtn) cancelBtn.textContent = '关闭';
+      fetch('/api/login/cancel', { method: 'POST' }).catch(() => {});
+      break;
+    case 'error':
+      if (loading) loading.innerHTML = '<div class="login-success-icon" style="color:#f85149">✕</div>';
+      statusText.textContent = '登录失败: ' + (data.error || '未知错误');
+      statusText.style.color = '#f85149';
+      if (cancelBtn) cancelBtn.textContent = '关闭';
+      fetch('/api/login/cancel', { method: 'POST' }).catch(() => {});
+      break;
+  }
+}
+
+function closeLoginModal() {
+  const modal = $('#login-modal');
+  if (modal) modal.classList.add('hidden');
+  loginModalOpen = false;
+  fetch('/api/login/cancel', { method: 'POST' }).catch(() => {});
 }
 
 function setupEnterKey() {

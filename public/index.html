@@ -22,6 +22,26 @@
     </div>
   </header>
 
+  <!-- Login Modal -->
+  <div id="login-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>扫码登录抖音</h3>
+      </div>
+      <div class="modal-body">
+        <div class="modal-loading" id="login-loading">
+          <div class="spinner"></div>
+        </div>
+        <p id="login-status-text">正在打开浏览器窗口...</p>
+        <p class="modal-hint">请在自动打开的浏览器窗口中<br>使用抖音扫码或手机号登录</p>
+        <p class="modal-tip">如果浏览器未自动打开，请手动访问 <strong>https://www.douyin.com</strong></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-sm" id="btn-login-cancel" onclick="closeLoginModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
   <!-- URL Input Area -->
   <section id="input-area">
     <div class="input-row">
