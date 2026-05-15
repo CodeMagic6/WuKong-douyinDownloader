@@ -10,6 +10,10 @@ function extractAwemeId(url) {
   const videoMatch = trimmed.match(/\/video\/(\d+)/);
   if (videoMatch) return videoMatch[1];
 
+  // iesdouyin.com/share/note/{id}
+  const noteMatch = trimmed.match(/\/share\/note\/(\d+)/);
+  if (noteMatch) return noteMatch[1];
+
   // modal_id={id}
   const modalMatch = trimmed.match(/modal_id=(\d+)/);
   if (modalMatch) return modalMatch[1];
