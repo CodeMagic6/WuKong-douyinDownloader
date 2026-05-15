@@ -4,15 +4,13 @@
 
 ## 快速上手
 
-### 1. 下载运行
+### 1. 运行程序
 
-[Releases](https://github.com/CodeMagic6/WuKong-douyinDownloader/releases) 下载最新 `douyin-downloader.exe`，双击 `启动.exe.bat` 运行。
-
-浏览器自动打开 http://localhost:3000
+双击 `启动.exe.bat` 运行，浏览器自动打开 http://localhost:3000
 
 ### 2. 扫码登录
 
-工具需要登录才能下载。**无需手动复制 Cookie**:
+工具需要登录才能下载。
 
 1. 在页面顶部点击 **登录: 未登录 → 扫码登录**
 2. 自动弹出浏览器窗口，显示抖音登录页
@@ -46,24 +44,6 @@
 **下载失败？** 检查网络，工具会自动重试。
 
 **服务断开？** Windows 下点击控制台窗口会暂停进程。重启工具即可。
-
-## 开发者
-
-从源码运行:
-
-```bash
-git clone https://github.com/CodeMagic6/WuKong-douyinDownloader.git
-npm install
-node server.js
-```
-
-构建 exe:
-
-```bash
-node build.js
-```
-
-输出在 `dist/`，双击 `启动.exe.bat`。
 
 ## 免责声明
 

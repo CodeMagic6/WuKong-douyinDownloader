@@ -1,16 +1,17 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { execSync, execFileSync } = require('child_process');
+const { execSync } = require('child_process');
 const config = require('./config');
 const SSEBroadcaster = require('./src/sse');
 const QueueManager = require('./src/queue-manager');
 
 // Disable Windows QuickEdit to prevent console pause on click
 try { execSync('reg add HKCU\\Console /v QuickEdit /t REG_DWORD /d 0 /f', { stdio: 'ignore', timeout: 3000 }); } catch {}
-const { initBrowser, closeBrowser, restartBrowser, getPage } = require('./src/browser');
+const { initBrowser, closeBrowser, restartBrowser, getPage, getContext } = require('./src/browser');
 const { closeApiPage } = require('./src/video-api');
 const { checkLogin } = require('./src/cookie-manager');
+const { loadPlaywright } = require('./src/playwright-loader');
 const ClipboardWatcher = require('./src/clipboard-watcher');
 
 const app = express();
@@ -118,9 +119,9 @@ async function startLoginFlow() {
   try {
     sse.broadcast('login_progress', { status: 'starting' });
 
-    const playwright = require('playwright');
+    const playwright = loadPlaywright();
     const { chromium } = playwright;
-    const { saveCookies, loadCookies } = require('./src/cookie-manager');
+    const { saveCookies } = require('./src/cookie-manager');
 
     loginBrowser = await chromium.launch({
       headless: false,
@@ -165,7 +166,6 @@ async function startLoginFlow() {
 
       // Update main browser context with new cookies
       try {
-        const { getContext } = require('./src/browser');
         const mainContext = await getContext();
         if (mainContext) {
           const cookies = await loginContext.cookies();
@@ -211,7 +211,6 @@ app.get('/api/ping', (req, res) => res.json({ ok: true }));
 
 // Status
 app.get('/api/status', (req, res) => {
-  // Re-check cookie from file on each status request
   try {
     const raw = fs.readFileSync(config.cookieFile, 'utf-8');
     const cookies = JSON.parse(raw);
@@ -391,7 +390,7 @@ async function start() {
   try {
     await initBrowser(config.browserHeadless);
     browserReady = true;
-    // Check cookies from file (more reliable than context after navigation)
+    // Check cookies from file
     try {
       const raw = fs.readFileSync(config.cookieFile, 'utf-8');
       const cookies = JSON.parse(raw);

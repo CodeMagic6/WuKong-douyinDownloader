@@ -1,3 +1,6 @@
+const { loadPlaywright } = require('./playwright-loader');
+const playwright = loadPlaywright();
+const { chromium } = playwright;
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -7,27 +10,6 @@ const config = require('../config');
 let browser = null;
 let context = null;
 let page = null;
-
-// Load playwright from filesystem (not pkg snapshot) to avoid native module issues
-function loadPlaywright() {
-  // When running from pkg exe, resolve playwright relative to execPath
-  const searchPaths = [
-    path.join(path.dirname(process.execPath), 'node_modules'),
-    path.join(__dirname, '..', '..', 'node_modules'),
-    path.join(process.cwd(), 'node_modules')
-  ];
-  for (const p of searchPaths) {
-    const pwPath = path.join(p, 'playwright');
-    try {
-      if (fs.existsSync(path.join(pwPath, 'index.js'))) {
-        return require(pwPath);
-      }
-    } catch {}
-  }
-  return require('playwright');
-}
-const playwright = loadPlaywright();
-const { chromium } = playwright;
 
 function ensureChromiumInstalled() {
   try {
