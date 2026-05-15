@@ -181,6 +181,15 @@ body {
   color: #8b949e;
 }
 
+.item-url {
+  font-size: 11px;
+  color: #484f58;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
 .item-actions {
   display: flex;
   gap: 6px;

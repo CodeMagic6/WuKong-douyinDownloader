@@ -335,6 +335,7 @@ function renderItem(item) {
         <div class="item-info">
           <div class="item-title" title="${escapeHtml(desc)}">${escapeHtml(trimmedDesc)}</div>
           ${author ? `<div class="item-author">${escapeHtml(author)}</div>` : ''}
+          <div class="item-url" title="${escapeHtml(item.url)}">${escapeHtml(item.url)}</div>
         </div>
         <div class="item-actions">${actionsHtml}</div>
       </div>

@@ -8,9 +8,17 @@ function getModule(url) {
   return url.startsWith('https') ? https : http;
 }
 
+function tmpPath(dest) {
+  return dest + '.tmp';
+}
+
 async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies) {
   const cookieStr = noCookies ? '' : await getCookieHeader(context);
+  const tmp = tmpPath(destPath);
   const maxRedirects = 5;
+
+  // Clean stale .tmp if present
+  try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
 
   return new Promise((resolve, reject) => {
     let redirectCount = 0;
@@ -23,23 +31,7 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
       };
       if (cookieStr) headers['Cookie'] = cookieStr;
 
-      // Check for partial download resume (delete stale locked files first)
-      let resumeOffset = 0;
       let fileWriteStream = null;
-      let fileOpenMode = 'w';
-      if (fs.existsSync(destPath)) {
-        try {
-          const stat = fs.statSync(destPath);
-          if (stat.size > 0) {
-            resumeOffset = stat.size;
-            headers['Range'] = `bytes=${resumeOffset}-`;
-            fileOpenMode = 'a';
-          }
-        } catch {
-          // Can't stat — delete and start fresh
-          try { fs.unlinkSync(destPath); } catch {}
-        }
-      }
 
       const req = mod.get(url, { headers, timeout: 60000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400) {
@@ -50,15 +42,11 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
           }
           const location = res.headers.location;
           if (!location) return reject(new Error('Redirect with no Location'));
-          // Handle relative redirect
           const resolved = location.startsWith('http') ? location : new URL(location, url).href;
           return doDownload(resolved);
         }
 
-        if (res.statusCode === 206) {
-          // Partial content — resume
-          fileOpenMode = 'a';
-        } else if (res.statusCode !== 200) {
+        if (res.statusCode !== 200 && res.statusCode !== 206) {
           res.resume();
           if (cookieStr && (res.statusCode === 403 || res.statusCode === 431)) {
             return reject(new Error('CDN rejected cookies, retry without'));
@@ -66,29 +54,13 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
           return reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
         }
 
-        const totalBytes = parseInt(res.headers['content-length'] || '0', 10) + (fileOpenMode === 'a' ? (resumeOffset || 0) : 0);
-        let bytesDone = fileOpenMode === 'a' ? (resumeOffset || 0) : 0;
+        const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+        let bytesDone = 0;
         let lastUpdate = Date.now();
         let lastBytes = 0;
 
-        try {
-          fileWriteStream = fs.createWriteStream(destPath, { flags: fileOpenMode });
-        } catch (e2) {
-          // EPERM — stale locked file, wait+retry (Windows Defender race)
-          if (e2.code === 'EPERM' || e2.code === 'EACCES') {
-            const _sb = new SharedArrayBuffer(4);
-            const _ia = new Int32Array(_sb);
-            let retried = false;
-            for (let w = 0; w < 5; w++) {
-              try { fs.unlinkSync(destPath); } catch {}
-              try { Atomics.wait(_ia, 0, 0, 500); } catch {}
-              try { fileWriteStream = fs.createWriteStream(destPath, { flags: 'w' }); retried = true; break; } catch {}
-            }
-            if (!retried) throw e2;
-          } else {
-            throw e2;
-          }
-        }
+        // Write to .tmp file — avoids EPERM from Defender locking existing .mp4
+        fileWriteStream = fs.createWriteStream(tmp, { flags: 'w' });
         fileWriteStream.on('error', reject);
 
         res.on('data', (chunk) => {
@@ -117,6 +89,13 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
 
         fileWriteStream.on('finish', () => {
           fileWriteStream.close();
+          // Atomic rename: .tmp → .mp4 avoids Defender race
+          try {
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+            fs.renameSync(tmp, destPath);
+          } catch (e) {
+            return reject(e);
+          }
           resolve({
             bytesTotal: bytesDone,
             filePath: destPath
@@ -137,6 +116,7 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
 
 async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries = 3) {
   let lastError;
+  const tmp = tmpPath(destPath);
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     for (let i = 0; i < urls.length; i++) {
@@ -144,17 +124,16 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
         return await downloadVideo(context, urls[i], destPath, onProgress);
       } catch (e) {
         lastError = e;
-        if (fs.existsSync(destPath)) {
-          try { fs.unlinkSync(destPath); } catch {}
-        }
+        // Clean up any leftover .tmp
+        try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
         if (e.message === 'CDN rejected cookies, retry without') {
           try {
             return await downloadVideo(context, urls[i], destPath, onProgress, true);
           } catch (e2) {
             lastError = e2;
-            if (fs.existsSync(destPath)) {
-              try { fs.unlinkSync(destPath); } catch {}
-            }
+            try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+            try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
           }
         }
       }
@@ -164,12 +143,13 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
     }
   }
 
-  // All direct HTTP failed — fall back: download via browser (uses full cookie jar)
+  // All direct HTTP failed — fall back: download via browser
   try { return await downloadViaBrowser(context, urls[0], destPath, onProgress); } catch(e) { throw lastError; }
 }
 
 async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
   let page = null;
+  const tmp = tmpPath(destPath);
   try {
     page = await context.newPage();
     await page.goto('https://www.douyin.com/', {
@@ -191,7 +171,10 @@ async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
 
     const matches = result.match(/^data:.*?;base64,(.+)$/);
     if (!matches) throw new Error('Failed to decode browser download');
-    fs.writeFileSync(destPath, Buffer.from(matches[1], 'base64'));
+    // Write to .tmp, then rename
+    fs.writeFileSync(tmp, Buffer.from(matches[1], 'base64'));
+    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+    fs.renameSync(tmp, destPath);
     const size = fs.statSync(destPath).size;
     if (onProgress) {
       onProgress({ percent: 100, bytesDone: size, bytesTotal: size, speed: 0, eta: 0 });
