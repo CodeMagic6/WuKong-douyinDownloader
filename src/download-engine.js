@@ -32,6 +32,7 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
       if (cookieStr) headers['Cookie'] = cookieStr;
 
       let fileWriteStream = null;
+      let fd = null;
 
       const req = mod.get(url, { headers, timeout: 60000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400) {
@@ -59,8 +60,9 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
         let lastUpdate = Date.now();
         let lastBytes = 0;
 
-        // Write to .tmp file — avoids EPERM from Defender locking existing .mp4
-        fileWriteStream = fs.createWriteStream(tmp, { flags: 'w' });
+        // Open fd manually so we can fsync before rename
+        try { fd = fs.openSync(tmp, 'w'); } catch (e) { return reject(e); }
+        fileWriteStream = fs.createWriteStream(tmp, { fd, autoClose: false });
         fileWriteStream.on('error', reject);
 
         res.on('data', (chunk) => {
@@ -88,8 +90,10 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
         res.pipe(fileWriteStream);
 
         fileWriteStream.on('finish', () => {
-          fileWriteStream.close();
-          // Atomic rename: .tmp → .mp4 avoids Defender race
+          // fsync before close: ensure data on disk before rename
+          try { fs.fsyncSync(fd); } catch (e) { return reject(e); }
+          try { fs.closeSync(fd); } catch (e) { return reject(e); }
+          // Rename .tmp → .mp4
           try {
             if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
             fs.renameSync(tmp, destPath);

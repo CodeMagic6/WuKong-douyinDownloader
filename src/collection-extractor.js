@@ -5,12 +5,29 @@ const MAX_SCROLL_ATTEMPTS = 100;
 const SCROLL_DELAY_MS = 2500;
 const INITIAL_WAIT_MS = 6000;
 
-// Return all video IDs on page
-function makeExtractVideosScript() {
+// Tab type → data-e2e container selector mapping
+// Prevents scraping sidebar/recommendation links outside target tab
+const TAB_CONTAINERS = {
+  'watch_later': '[data-e2e="user-watchlater-tab"]',
+  'post': '[data-e2e="user-post-list"]',
+  'record': '[data-e2e="user-post-list"]',
+  'favorite': null,   // unknown, fallback to full page
+  'recommend': null,   // unknown
+};
+
+function getScopeSelector(url) {
+  const m = url && url.match(/showTab=(\w+)/);
+  const tab = m ? m[1] : '';
+  return TAB_CONTAINERS[tab] || '';
+}
+
+// Return all video IDs on page, optionally scoped to a container
+function makeExtractVideosScript(scopeSelector) {
+  const scope = scopeSelector ? `${scopeSelector} ` : '';
   return `(function() {
     const results = [];
     const seen = new Set();
-    for (var a of document.querySelectorAll('a[href*="/video/"]')) {
+    for (var a of document.querySelectorAll('${scope}a[href*="/video/"]')) {
       var m = a.href.match(/\\/video\\/(\\d+)/);
       if (m && !seen.has(m[1])) { seen.add(m[1]); results.push(m[1]); }
     }
@@ -49,13 +66,14 @@ function makeScrollScript() {
 
 async function extractCollectionVideos(url) {
   const page = await getFreshPage();
+  const scope = getScopeSelector(url);
   try {
     await page.goto(url, { timeout: 60000, waitUntil: 'domcontentloaded' }).catch(() => {});
     await sleep(INITIAL_WAIT_MS);
 
     const allIds = new Set();
     let idleScrolls = 0;
-    const evalScript = makeExtractVideosScript();
+    const evalScript = makeExtractVideosScript(scope);
     const scrollScript = makeScrollScript();
 
     // Wait for at least some video links to appear
@@ -91,13 +109,14 @@ async function extractCollectionVideos(url) {
 
 async function extractCollectionWithProgress(url, onProgress, isCancelled) {
   const page = await getFreshPage();
+  const scope = getScopeSelector(url);
   try {
     await page.goto(url, { timeout: 60000, waitUntil: 'domcontentloaded' }).catch(() => {});
     await sleep(INITIAL_WAIT_MS);
 
     const allIds = new Set();
     let idleScrolls = 0;
-    const evalScript = makeExtractVideosScript();
+    const evalScript = makeExtractVideosScript(scope);
     const scrollScript = makeScrollScript();
 
     // Wait for at least some video links to appear

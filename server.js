@@ -75,9 +75,29 @@ syncClipboardWatcher();
 function syncClipboardWatcher() {
   if (config.clipboardCapture) {
     clipboardWatcher.start(config, queue, sse);
+    console.log('[设置] 剪贴板监听: ✅ 已开启 (复制抖音链接自动下载)');
   } else {
     clipboardWatcher.stop();
+    console.log('[设置] 剪贴板监听: ❌ 已关闭');
   }
+}
+
+// Remove stale .tmp files left by previous crashed instances
+function cleanupStaleTmpFiles(dir) {
+  try {
+    const files = fs.readdirSync(dir, { withFileTypes: true });
+    for (const f of files) {
+      if (f.isDirectory()) {
+        cleanupStaleTmpFiles(path.join(dir, f.name));
+        continue;
+      }
+      if (f.name.endsWith('.tmp')) {
+        const fullPath = path.join(dir, f.name);
+        fs.unlinkSync(fullPath);
+        console.log(`清理残留 .tmp: ${f.name}`);
+      }
+    }
+  } catch {}
 }
 
 let browserReady = false;
@@ -384,6 +404,8 @@ async function start() {
   if (!fs.existsSync(config.downloadDir)) {
     fs.mkdirSync(config.downloadDir, { recursive: true });
   }
+  // Clean stale .tmp files from previous crashed runs
+  cleanupStaleTmpFiles(config.downloadDir);
 
   // Init browser
   console.log('启动浏览器...');
