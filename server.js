@@ -73,7 +73,7 @@ const sse = new SSEBroadcaster(function() {
     shutdownTimer = null;
     if (sse.getClientCount() > 0) return;
     console.log('[自动退出] 页面已关闭, 清理资源...');
-    clipboardWatcher.stop();
+    // Don't stop clipboard here — if browser reconnects we restart it
     stopTmpCleanupTimer();
     stopWatchdog();
     try {
@@ -87,9 +87,16 @@ const sse = new SSEBroadcaster(function() {
     } catch(e) {}
     // Graceful delay then exit
     var exitTimer = setInterval(function() {
-      if (sse.getClientCount() > 0) { clearInterval(exitTimer); return; }
+      if (sse.getClientCount() > 0) {
+        clearInterval(exitTimer);
+        syncClipboardWatcher(); // Restart clipboard if browser came back
+        return;
+      }
     }, 5000);
-    setTimeout(function() { process.exit(0); }, 8000);
+    setTimeout(function() {
+      clipboardWatcher.stop();
+      process.exit(0);
+    }, 8000);
   }, 10000);
 });
 const queue = new QueueManager(config.maxConcurrent, sse);
