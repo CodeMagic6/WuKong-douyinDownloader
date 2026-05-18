@@ -33,6 +33,19 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
 
       let fileWriteStream = null;
       let fd = null;
+      let fdOpen = false;
+
+      function closeFd() {
+        if (fdOpen && fd !== null) {
+          try { fs.closeSync(fd); } catch {}
+          fdOpen = false;
+        }
+      }
+
+      function cleanupAndReject(msg) {
+        closeFd();
+        reject(msg);
+      }
 
       const req = mod.get(url, { headers, timeout: 60000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400) {
@@ -61,9 +74,9 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
         let lastBytes = 0;
 
         // Open fd manually so we can fsync before rename
-        try { fd = fs.openSync(tmp, 'w'); } catch (e) { return reject(e); }
+        try { fd = fs.openSync(tmp, 'w'); fdOpen = true; } catch (e) { return reject(e); }
         fileWriteStream = fs.createWriteStream(tmp, { fd, autoClose: false });
-        fileWriteStream.on('error', reject);
+        fileWriteStream.on('error', (e) => cleanupAndReject(e));
 
         res.on('data', (chunk) => {
           bytesDone += chunk.length;
@@ -87,11 +100,13 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
           }
         });
 
+        res.on('error', (e) => cleanupAndReject(e));
         res.pipe(fileWriteStream);
 
         fileWriteStream.on('finish', () => {
+          fdOpen = false; // about to close
           // fsync before close: ensure data on disk before rename
-          try { fs.fsyncSync(fd); } catch (e) { return reject(e); }
+          try { fs.fsyncSync(fd); } catch (e) { closeFd(); return reject(e); }
           try { fs.closeSync(fd); } catch (e) { return reject(e); }
           // Rename .tmp → .mp4
           try {
@@ -112,10 +127,10 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
         });
       });
 
-      req.on('error', reject);
+      req.on('error', (e) => cleanupAndReject(e));
       req.on('timeout', () => {
         req.destroy();
-        reject(new Error('Download timeout (60s)'));
+        cleanupAndReject(new Error('Download timeout (60s)'));
       });
     }
 
