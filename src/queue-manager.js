@@ -317,7 +317,7 @@ class QueueManager {
       });
     } catch (e) {
       // Retry on transient errors with fresh metadata
-      if (!/2100011|不存在|已设为私密/i.test(e.message) && (item.retryCount || 0) < 2) {
+      if (!/2100011|不存在|已设为私密|文件写入失败/i.test(e.message) && (item.retryCount || 0) < 2) {
         item.retryCount = (item.retryCount || 0) + 1;
         item.status = 'extracting';
         this._broadcastQueue();

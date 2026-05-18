@@ -8,7 +8,7 @@ const QueueManager = require('./src/queue-manager');
 
 // Disable Windows QuickEdit to prevent console pause on click
 try { execSync('reg add HKCU\\Console /v QuickEdit /t REG_DWORD /d 0 /f', { stdio: 'ignore', timeout: 3000 }); } catch {}
-const { initBrowser, closeBrowser, restartBrowser, getPage, getContext } = require('./src/browser');
+const { initBrowser, closeBrowser, restartBrowser, getPage, getContext, checkBrowserHealth } = require('./src/browser');
 const { closeApiPage } = require('./src/video-api');
 const { checkLogin } = require('./src/cookie-manager');
 const { loadPlaywright } = require('./src/playwright-loader');
@@ -66,7 +66,32 @@ const staticDir = typeof process.pkg !== 'undefined'
 app.use(express.static(staticDir));
 
 // Init SSE + Queue
-const sse = new SSEBroadcaster();
+var shutdownTimer = null;
+const sse = new SSEBroadcaster(function() {
+  if (shutdownTimer) return;
+  shutdownTimer = setTimeout(function() {
+    shutdownTimer = null;
+    if (sse.getClientCount() > 0) return;
+    console.log('[自动退出] 页面已关闭, 清理资源...');
+    clipboardWatcher.stop();
+    stopTmpCleanupTimer();
+    stopWatchdog();
+    try {
+      const { getContext } = require('./src/browser');
+      getContext().then(function(ctx) {
+        if (ctx) {
+          const { saveCookies } = require('./src/cookie-manager');
+          saveCookies(ctx, config.cookieFile);
+        }
+      }).catch(function() {});
+    } catch(e) {}
+    // Graceful delay then exit
+    var exitTimer = setInterval(function() {
+      if (sse.getClientCount() > 0) { clearInterval(exitTimer); return; }
+    }, 5000);
+    setTimeout(function() { process.exit(0); }, 8000);
+  }, 10000);
+});
 const queue = new QueueManager(config.maxConcurrent, sse);
 const clipboardWatcher = new ClipboardWatcher();
 syncClipboardWatcher();
@@ -398,6 +423,138 @@ app.post('/api/open-dir', (req, res) => {
   }
 });
 
+// Periodically clean orphaned .tmp files (every 30s)
+let tmpCleanupTimer = null;
+function startTmpCleanupTimer() {
+  stopTmpCleanupTimer();
+  tmpCleanupTimer = setInterval(() => {
+    cleanupStaleTmpFiles(config.downloadDir);
+  }, 30000);
+}
+function stopTmpCleanupTimer() {
+  if (tmpCleanupTimer) {
+    clearInterval(tmpCleanupTimer);
+    tmpCleanupTimer = null;
+  }
+}
+
+// API: manual .tmp cleanup trigger
+app.post('/api/cleanup-tmp', (req, res) => {
+  cleanupStaleTmpFiles(config.downloadDir);
+  if (config.customDownloadDir && config.useCustomDir) {
+    cleanupStaleTmpFiles(config.customDownloadDir);
+  }
+  res.json({ success: true, message: '临时文件已清理' });
+});
+
+// API: debug watch-later DOM structure
+app.get('/api/debug/watchlater', async (req, res) => {
+  try {
+    const { getFreshPage } = require('./src/browser');
+    const page = await getFreshPage();
+    let result;
+    try {
+      await page.goto('https://www.douyin.com/user/self?showTab=watch_later', { timeout: 30000, waitUntil: 'domcontentloaded' }).catch(() => {});
+      for (let i = 0; i < 20; i++) {
+        const info = await page.evaluate(() => {
+          const tabs = document.querySelectorAll('[data-e2e="user-watchlater-tab"]');
+          for (const t of tabs) { if (t.scrollHeight > 100) return { found: true, count: t.querySelectorAll('a[href*="/video/"]').length }; }
+          return { found: false };
+        });
+        if (info.found && info.count > 0) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      result = await page.evaluate(() => {
+        const tabs = document.querySelectorAll('[data-e2e="user-watchlater-tab"]');
+        let c = null;
+        for (const t of tabs) { if (t.scrollHeight > 100) { c = t; break; } }
+        if (!c) return { error: 'no container' };
+        const links = c.querySelectorAll('a[href*="/video/"]');
+        const seen = {}, items = [];
+        for (let i = 0; i < links.length; i++) {
+          const a = links[i]; const m = a.href.match(/\/video\/(\d+)/);
+          if (!m || seen[m[1]]) continue; seen[m[1]] = 1;
+          const card = a.closest('[data-e2e]') || a.closest('[class*="card"]') || a.parentElement;
+          const cardE2e = (card && card.getAttribute) ? (card.getAttribute('data-e2e') || '') : '';
+          const hasRemove = card ? card.querySelectorAll('[class*="remove"],[class*="delete"],[class*="del"],[class*="close"],[data-e2e*="remove"],[data-e2e*="delete"],[aria-label*="移出"],[aria-label*="删除"]').length > 0 : false;
+          const p1E2e = (a.parentElement && a.parentElement.getAttribute) ? (a.parentElement.getAttribute('data-e2e') || '') : '';
+          items.push({ idx: i, id: m[1], cardE2e: cardE2e.slice(0, 60), hasRemove, p1E2e: p1E2e.slice(0, 40) });
+        }
+        const headings = [];
+        const allEls = c.querySelectorAll('*');
+        for (const el of allEls) {
+          if (el.children.length > 0) continue;
+          const txt = (el.textContent || '').trim();
+          if (txt.includes('推荐') || txt.includes('为你')) headings.push({ tag: el.tagName, text: txt.slice(0, 50) });
+        }
+        return { total: items.length, items, headings };
+      });
+    } finally { await page.close().catch(() => {}); }
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- Watchdog: event loop + browser health ----------
+let watchdogTimers = [];
+
+function startWatchdog() {
+  stopWatchdog();
+
+  // 1. Event loop lag monitor (every 10s)
+  watchdogTimers.push(setInterval(() => {
+    const now = Date.now();
+    setImmediate(() => {
+      const lag = Date.now() - now;
+      if (lag > 500) {
+        console.warn(`[看门狗] 事件循环延迟: ${lag}ms (可能进程繁忙)`);
+      }
+      // If lag > 10s, something is seriously wrong — log to help debugging
+      if (lag > 10000) {
+        console.error(`[看门狗] ⚠️ 检测到严重阻塞: ${lag}ms, 正在恢复...`);
+      }
+    });
+  }, 10000));
+
+  // 2. Browser health check (every 15s)
+  watchdogTimers.push(setInterval(async () => {
+    const healthy = await checkBrowserHealth();
+    if (browserReady !== healthy) {
+      browserReady = healthy;
+      sse.broadcast('status_update', {
+        browserReady,
+        cookieValid
+      });
+    }
+    if (!healthy) {
+      console.log('[看门狗] 浏览器不健康, 自动重启...');
+      try {
+        await restartBrowser(config.browserHeadless);
+        browserReady = true;
+        // Re-check cookie status
+        try {
+          const raw = fs.readFileSync(config.cookieFile, 'utf-8');
+          const cookies = JSON.parse(raw);
+          cookieValid = cookies.some(c => c.name === 'sessionid');
+        } catch {
+          cookieValid = false;
+        }
+        sse.broadcast('status_update', { browserReady, cookieValid });
+        console.log('[看门狗] 浏览器已自动重启 ✅');
+      } catch (e) {
+        console.error('[看门狗] 浏览器重启失败:', e.message);
+      }
+    }
+  }, 15000));
+}
+
+function stopWatchdog() {
+  for (const t of watchdogTimers) {
+    clearInterval(t);
+  }
+  watchdogTimers = [];
+}
+// ---------- End watchdog ----------
+
 // ---------- Startup ----------
 async function start() {
   // Ensure download dir
@@ -406,6 +563,8 @@ async function start() {
   }
   // Clean stale .tmp files from previous crashed runs
   cleanupStaleTmpFiles(config.downloadDir);
+  startTmpCleanupTimer();
+  startWatchdog(); // event loop + browser health monitor
 
   // Init browser
   console.log('启动浏览器...');
@@ -451,6 +610,8 @@ start().catch(e => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n关闭中...');
+  stopTmpCleanupTimer();
+  stopWatchdog();
   await closeApiPage();
   await closeBrowser();
   process.exit(0);

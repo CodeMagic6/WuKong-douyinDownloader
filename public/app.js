@@ -5,6 +5,7 @@ let statusInfo = {};
 let clipboardCaptureEnabled = false;
 let autoDownloadEnabled = false;
 let loginModalOpen = false;
+let lastSSEEventTime = Date.now(); // for stale connection detection
 
 // DOM refs
 const $ = (s) => document.querySelector(s);
@@ -16,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchQueue();
   fetchSettings();
   connectSSE();
+  startSSEWatchdog(); // proactive reconnect on stale connection
   setupEnterKey();
   setupSaveModeToggle();
   setupClipboardToggles();
@@ -68,7 +70,18 @@ function connectSSE() {
     _es.close();
     _es = null;
   }
+
   _es = new EventSource('/api/progress');
+
+  // Wrap addEventListener to track last event time for all SSE events
+  // Used by SSE watchdog to detect stale connections
+  const _origAdd = _es.addEventListener.bind(_es);
+  _es.addEventListener = function(type, handler) {
+    _origAdd(type, function(e) {
+      lastSSEEventTime = Date.now();
+      handler(e);
+    });
+  };
 
   _es.addEventListener('queue_update', (e) => {
     const data = JSON.parse(e.data);
@@ -166,11 +179,13 @@ function connectSSE() {
   _es.onerror = () => {
     // Increment health fail on SSE error — server might be paused
     healthFailCount++;
+    lastSSEEventTime = Date.now(); // mark "event" so watchdog doesn't kill good connection
   };
 
   _es.onopen = () => {
     // SSE connected = server alive, reset health counter
     healthFailCount = 0;
+    lastSSEEventTime = Date.now();
     if (!serverOnline) {
       serverOnline = true;
       updateStatusBar();
@@ -568,6 +583,17 @@ function openDownloadDir() {
     .catch(e => console.error('打开目录失败:', e));
 }
 
+function cleanupTmpFiles() {
+  fetch('/api/cleanup-tmp', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        alert('✅ ' + data.message);
+      }
+    })
+    .catch(e => alert('清理失败: ' + e.message));
+}
+
 // ---------- Utils ----------
 function fetchStatus() {
   fetch('/api/status')
@@ -626,6 +652,21 @@ function showDisconnectBanner() {
 function hideDisconnectBanner() {
   const banner = $('#disconnect-banner');
   if (banner) banner.remove();
+}
+
+// SSE watchdog — reconnect if no events received for 35s (stale connection)
+let _sseWatchdogTimer = null;
+function startSSEWatchdog() {
+  if (_sseWatchdogTimer) clearInterval(_sseWatchdogTimer);
+  _sseWatchdogTimer = setInterval(() => {
+    const elapsed = Date.now() - lastSSEEventTime;
+    if (elapsed > 35000) {
+      console.warn('SSE 连接疑似断开 (' + Math.round(elapsed/1000) + 's 无事件), 强制重连...');
+      // Reset tracker immediately to avoid reconnect loop
+      lastSSEEventTime = Date.now();
+      connectSSE();
+    }
+  }, 10000);
 }
 
 function escapeHtml(str) {

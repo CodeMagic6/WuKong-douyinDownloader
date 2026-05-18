@@ -1,159 +1,62 @@
 const { getFreshPage } = require('./browser');
 const { sleep } = require('./helpers');
 
-const MAX_SCROLL_ATTEMPTS = 100;
-const SCROLL_DELAY_MS = 2500;
-const INITIAL_WAIT_MS = 6000;
+async function _extractCore(url, onProgress, isCancelled) {
+  var page = await getFreshPage();
 
-// Tab type → data-e2e container selector mapping
-// Prevents scraping sidebar/recommendation links outside target tab
-const TAB_CONTAINERS = {
-  'watch_later': '[data-e2e="user-watchlater-tab"]',
-  'post': '[data-e2e="user-post-list"]',
-  'record': '[data-e2e="user-post-list"]',
-  'favorite': null,   // unknown, fallback to full page
-  'recommend': null,   // unknown
-};
-
-function getScopeSelector(url) {
-  const m = url && url.match(/showTab=(\w+)/);
-  const tab = m ? m[1] : '';
-  return TAB_CONTAINERS[tab] || '';
-}
-
-// Return all video IDs on page, optionally scoped to a container
-function makeExtractVideosScript(scopeSelector) {
-  const scope = scopeSelector ? `${scopeSelector} ` : '';
-  return `(function() {
-    const results = [];
-    const seen = new Set();
-    for (var a of document.querySelectorAll('${scope}a[href*="/video/"]')) {
-      var m = a.href.match(/\\/video\\/(\\d+)/);
-      if (m && !seen.has(m[1])) { seen.add(m[1]); results.push(m[1]); }
-    }
-    return results;
-  })()`;
-}
-
-// Try multiple scroll strategies to trigger lazy loading
-function makeScrollScript() {
-  return `(function() {
-    var containers = [
-      document.documentElement,
-      document.body,
-      document.querySelector('[class*="route-scroll-container"]'),
-      document.querySelector('[class*="parent-route-container"]'),
-      document.querySelector('#pagelet-boot'),
-      document.querySelector('[data-e2e="user-post-list"]'),
-      document.querySelector('[class*="profile"]'),
-      document.querySelector('[class*="user"]'),
-      document.querySelector('.DouyinProfileApp')
-    ];
-    for (var c of containers) {
-      if (c && (typeof c.scrollHeight === 'number' || typeof c.scrollTop === 'number')) {
-        try {
-          var prev = c.scrollTop || 0;
-          c.scrollTop = c.scrollHeight;
-          if (c.scrollTop > prev) return true;
-        } catch(e) {}
-      }
-    }
-    window.scrollTo(0, document.body.scrollHeight);
-    window.scrollBy(0, 500);
-    return true;
-  })()`;
-}
-
-async function extractCollectionVideos(url) {
-  const page = await getFreshPage();
-  const scope = getScopeSelector(url);
   try {
-    await page.goto(url, { timeout: 60000, waitUntil: 'domcontentloaded' }).catch(() => {});
-    await sleep(INITIAL_WAIT_MS);
+    var allIds = [];
 
-    const allIds = new Set();
-    let idleScrolls = 0;
-    const evalScript = makeExtractVideosScript(scope);
-    const scrollScript = makeScrollScript();
+    // API intercept — only way to exclude recommended videos
+    page.on('response', function(resp) {
+      if (!resp.url().includes('/aweme/v1/web/watchlater/list/')) return;
+      resp.json().then(function(body) {
+        if (!body || !body.items) return;
+        for (var i = 0; i < body.items.length; i++) {
+          var id = String(body.items[i].aweme_id || body.items[i].id || '');
+          if (id && allIds.indexOf(id) === -1) allIds.push(id);
+        }
+      }).catch(function() {});
+    });
 
-    // Wait for at least some video links to appear
-    for (let w = 0; w < 15; w++) {
-      const ids = await page.evaluate(evalScript);
-      if (ids.length > 0) break;
-      await page.evaluate(scrollScript);
+    await page.goto(url, { timeout: 60000, waitUntil: 'domcontentloaded' }).catch(function() {});
+    if (isCancelled && isCancelled()) return [];
+
+    // Wait for first API batch
+    for (var w = 0; w < 8; w++) {
+      if (allIds.length > 0) break;
+      await sleep(1000);
+    }
+    console.log('[collection] initial:', allIds.length);
+
+    // Scroll via mouse wheel + JS to trigger lazy pagination
+    var prev = allIds.length;
+    var stale = 0;
+    for (var s = 0; s < 25; s++) {
+      if (isCancelled && isCancelled()) return [];
+
+      await page.mouse.move(600, 400);
+      await page.mouse.wheel(0, 5000);
+      await page.evaluate(function() { window.scrollBy(0, 2000); }).catch(function() {});
       await sleep(2000);
-    }
 
-    for (let attempt = 0; attempt < MAX_SCROLL_ATTEMPTS; attempt++) {
-      const ids = await page.evaluate(evalScript);
-
-      const before = allIds.size;
-      for (const id of ids) allIds.add(id);
-
-      if (allIds.size === before) {
-        idleScrolls++;
-        if (idleScrolls >= 8) break;
+      if (allIds.length > prev) {
+        console.log('[collection] scroll', s, 'ids:', allIds.length);
+        if (onProgress) onProgress(allIds.length, s + 1);
+        prev = allIds.length;
+        stale = 0;
       } else {
-        idleScrolls = 0;
+        stale++;
+        if (stale >= 3) break;
       }
-
-      await page.evaluate(scrollScript);
-      await sleep(SCROLL_DELAY_MS);
     }
 
-    return Array.from(allIds);
+    console.log('[collection] done:', allIds.length);
+    return allIds;
+
   } finally {
-    await page.close().catch(() => {});
+    await page.close().catch(function() {});
   }
 }
 
-async function extractCollectionWithProgress(url, onProgress, isCancelled) {
-  const page = await getFreshPage();
-  const scope = getScopeSelector(url);
-  try {
-    await page.goto(url, { timeout: 60000, waitUntil: 'domcontentloaded' }).catch(() => {});
-    await sleep(INITIAL_WAIT_MS);
-
-    const allIds = new Set();
-    let idleScrolls = 0;
-    const evalScript = makeExtractVideosScript(scope);
-    const scrollScript = makeScrollScript();
-
-    // Wait for at least some video links to appear
-    for (let w = 0; w < 15; w++) {
-      if (isCancelled && isCancelled()) break;
-      const ids = await page.evaluate(evalScript);
-      if (ids.length > 0) break;
-      await page.evaluate(scrollScript);
-      await sleep(2000);
-    }
-
-    for (let attempt = 0; attempt < MAX_SCROLL_ATTEMPTS; attempt++) {
-      if (isCancelled && isCancelled()) break;
-
-      const ids = await page.evaluate(evalScript);
-
-      if (isCancelled && isCancelled()) break;
-      const before = allIds.size;
-      for (const id of ids) allIds.add(id);
-
-      if (allIds.size === before) {
-        idleScrolls++;
-        if (idleScrolls >= 8) break;
-      } else {
-        idleScrolls = 0;
-      }
-
-      if (onProgress) onProgress(allIds.size, attempt + 1);
-
-      await page.evaluate(scrollScript);
-      await sleep(SCROLL_DELAY_MS);
-    }
-
-    return Array.from(allIds);
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
-module.exports = { extractCollectionVideos, extractCollectionWithProgress };
+module.exports = { extractCollectionVideos: _extractCore, extractCollectionWithProgress: _extractCore };

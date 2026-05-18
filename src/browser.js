@@ -109,9 +109,60 @@ async function getFreshPage() {
   return p;
 }
 
+/** Create an isolated context (no shared service workers) for collection extraction.
+ *  Copies live cookies from main context so session is fresh, not stale file copy. */
+async function getIsolatedPage() {
+  if (!browser) throw new Error('Browser not initialized');
+  var ctx = await browser.newContext({
+    viewport: config.viewport,
+    userAgent: config.userAgent,
+    locale: 'zh-CN'
+  });
+  // Priority: live main context cookies > saved cookie file
+  if (context) {
+    try {
+      var mainCookies = await context.cookies();
+      if (mainCookies && mainCookies.length > 0) {
+        await ctx.addCookies(mainCookies);
+      } else {
+        await loadCookies(ctx, config.cookieFile);
+      }
+    } catch(e) {
+      await loadCookies(ctx, config.cookieFile);
+    }
+  } else {
+    await loadCookies(ctx, config.cookieFile);
+  }
+  var p = await ctx.newPage();
+  p.__isolatedContext = ctx;
+  return p;
+}
+
+async function checkBrowserHealth() {
+  if (!browser || !context || !page) return false;
+  try {
+    await context.pages();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function getContext() {
   if (!context || !browser) {
     console.log('浏览器未就绪，自动重启...');
+    await initBrowser(config.browserHeadless);
+    return context;
+  }
+  // Verify context is alive — dead Playwright references pass null check
+  try {
+    const pages = await context.pages();
+    // Also verify page is responsive
+    if (page) {
+      await page.evaluate('1');
+    }
+  } catch {
+    console.log('浏览器上下文已失效，自动重启...');
     await initBrowser(config.browserHeadless);
   }
   return context;
@@ -133,4 +184,4 @@ async function closeBrowser() {
   page = null;
 }
 
-module.exports = { initBrowser, getPage, getContext, getFreshPage, restartBrowser, closeBrowser };
+module.exports = { initBrowser, getPage, getContext, getFreshPage, getIsolatedPage, restartBrowser, closeBrowser, checkBrowserHealth };

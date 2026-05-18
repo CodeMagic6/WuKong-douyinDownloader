@@ -98,6 +98,11 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
             if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
             fs.renameSync(tmp, destPath);
           } catch (e) {
+            // If .tmp was deleted externally (user deleted while downloading),
+            // don't retry — it'll just fail again
+            if (!fs.existsSync(tmp)) {
+              return reject(new Error('文件写入失败: 临时文件已被外部删除'));
+            }
             return reject(e);
           }
           resolve({
@@ -125,15 +130,23 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     for (let i = 0; i < urls.length; i++) {
       try {
-        return await downloadVideo(context, urls[i], destPath, onProgress);
+        const result = await downloadVideo(context, urls[i], destPath, onProgress);
+        // Verify: .mp4 must exist, .tmp must be gone
+        if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
+          throw new Error('文件写入失败: 重命名后验证不通过');
+        }
+        return result;
       } catch (e) {
         lastError = e;
-        // Clean up any leftover .tmp
         try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
         try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
         if (e.message === 'CDN rejected cookies, retry without') {
           try {
-            return await downloadVideo(context, urls[i], destPath, onProgress, true);
+            const result = await downloadVideo(context, urls[i], destPath, onProgress, true);
+            if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
+              throw new Error('文件写入失败: 重命名后验证不通过');
+            }
+            return result;
           } catch (e2) {
             lastError = e2;
             try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
@@ -148,7 +161,16 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
   }
 
   // All direct HTTP failed — fall back: download via browser
-  try { return await downloadViaBrowser(context, urls[0], destPath, onProgress); } catch(e) { throw lastError; }
+  try {
+    const result = await downloadViaBrowser(context, urls[0], destPath, onProgress);
+    if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+      throw new Error('文件写入失败: 重命名后验证不通过');
+    }
+    return result;
+  } catch(e) {
+    throw e;
+  }
 }
 
 async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
@@ -184,6 +206,10 @@ async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
       onProgress({ percent: 100, bytesDone: size, bytesTotal: size, speed: 0, eta: 0 });
     }
     return { bytesTotal: size, filePath: destPath };
+  } catch (e) {
+    // Clean up orphaned .tmp on failure
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    throw e;
   } finally {
     if (page) await page.close().catch(() => {});
   }
