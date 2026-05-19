@@ -43,6 +43,10 @@ async function _extractCore(url, onProgress, isCancelled) {
       return [];
     }
 
+    // Scroll to top first — ensures consistent scroll distance each run
+    await page.evaluate(function() { window.scrollTo(0, 0); }).catch(function() {});
+    await sleep(500);
+
     // Scroll via mouse wheel + JS to trigger lazy pagination
     var prev = allIds.length;
     var stale = 0;
