@@ -19,6 +19,7 @@ async function _extractCore(url, onProgress, isCancelled) {
           }
           return;
         }
+        console.log('[collection] API batch:', body.items.length, 'has_more:', body.has_more);
         for (var i = 0; i < body.items.length; i++) {
           var id = String(body.items[i].aweme_id || body.items[i].id || '');
           if (id && allIds.indexOf(id) === -1) allIds.push(id);
@@ -43,22 +44,44 @@ async function _extractCore(url, onProgress, isCancelled) {
       return [];
     }
 
-    // Scroll to top first — ensures consistent scroll distance each run
-    await page.evaluate(function() { window.scrollTo(0, 0); }).catch(function() {});
-    await sleep(500);
-
-    // Scroll via mouse wheel + JS to trigger lazy pagination
+    // Scroll via mouse wheel + container scroll for lazy pagination
     var prev = allIds.length;
     var stale = 0;
     for (var s = 0; s < 25; s++) {
       if (isCancelled && isCancelled()) return [];
 
-      // Scroll with timeout to prevent freeze on bad page state
-      await Promise.race([
-        page.mouse.move(600, 400).then(function() { return page.mouse.wheel(0, 5000); }),
-        sleep(5000)
-      ]).catch(function() {});
-      page.evaluate(function() { window.scrollBy(0, 2000); }).catch(function() {});
+      // Step 1: Mouse wheel at viewport center (hits scrollable content area)
+      await page.mouse.move(720, 450).catch(function() {});
+      await page.mouse.wheel(0, 6000).catch(function() {});
+      await sleep(600);
+
+      // Step 2: Programmatic incremental scroll on best scrollable container
+      await page.evaluate(function() {
+        var all = document.querySelectorAll('body *');
+        var best = null, bestH = 0;
+        for (var i = 0; i < all.length; i++) {
+          try {
+            var e = all[i];
+            var s = window.getComputedStyle(e);
+            if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && e.scrollHeight > e.clientHeight + 5) {
+              if (e.scrollHeight > bestH) { bestH = e.scrollHeight; best = e; }
+            }
+          } catch(ex) {}
+        }
+        if (best) {
+          // Incremental scroll: each iteration scrolls ~80% of viewport height
+          // Avoids scrollTop = scrollHeight which may not fire scroll event if value unchanged
+          var nearBottom = best.scrollTop + best.clientHeight >= best.scrollHeight - 50;
+          if (nearBottom) {
+            // Bounce up so next scroll fires event
+            best.scrollTop = Math.max(0, best.scrollTop - 200);
+          } else {
+            best.scrollTop = Math.min(best.scrollTop + best.clientHeight * 0.8, best.scrollHeight);
+          }
+        } else {
+          window.scrollBy(0, 2000);
+        }
+      }).catch(function() {});
       await sleep(2000);
 
       if (allIds.length > prev) {
@@ -68,7 +91,7 @@ async function _extractCore(url, onProgress, isCancelled) {
         stale = 0;
       } else {
         stale++;
-        if (stale >= 3) break;
+        if (stale >= 5) break;
       }
     }
 
