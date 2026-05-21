@@ -11,6 +11,14 @@ let browser = null;
 let context = null;
 let page = null;
 
+/** Race a promise against a timeout. Rejects with TimeoutErrorName if timeout fires first. */
+function withTimeout(promise, ms, label) {
+  const timer = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`超时: ${label} 超过 ${ms}ms`)), ms)
+  );
+  return Promise.race([promise, timer]);
+}
+
 function ensureChromiumInstalled() {
   try {
     const p = chromium.executablePath();
@@ -45,6 +53,14 @@ async function initBrowser(headless = config.browserHeadless) {
   browser = await chromium.launch({
     headless,
     args: config.browserArgs
+  });
+
+  // Detect browser disconnect (sleep/hibernate/crash) immediately
+  browser.on('disconnected', () => {
+    console.log('[浏览器] 检测到浏览器断开连接(可能系统休眠), 已标记失效, 等待自动重启');
+    // Null references so getContext/getPage immediately restart instead of hanging
+    page = null;
+    context = null;
   });
 
   context = await browser.newContext({
@@ -88,15 +104,17 @@ async function initBrowser(headless = config.browserHeadless) {
 
 async function getPage() {
   if (!page || !context || !browser) {
-    throw new Error('Browser not initialized. Call initBrowser() first.');
+    console.log('浏览器引用已失效，自动重启...');
+    await initBrowser(config.browserHeadless);
+    await new Promise(r => setTimeout(r, 3000));
+    return page;
   }
   // Check browser still alive — auto-recover if disconnected
   try {
-    await page.evaluate('1');
+    await withTimeout(page.evaluate('1'), 5000, 'page.evaluate');
   } catch {
     console.log('页面断开，自动重启浏览器...');
     await initBrowser(config.browserHeadless);
-    // Wait for page to settle after navigation
     await new Promise(r => setTimeout(r, 3000));
   }
   return page;
@@ -141,7 +159,9 @@ async function getIsolatedPage() {
 async function checkBrowserHealth() {
   if (!browser || !context || !page) return false;
   try {
-    await context.pages();
+    // Timeout: if pages() hangs after sleep, don't block watchdog
+    const pages = await withTimeout(context.pages(), 5000, 'context.pages');
+    await withTimeout(page.evaluate('1'), 5000, 'page.evaluate');
     return true;
   } catch {
     return false;
@@ -155,14 +175,14 @@ async function getContext() {
     return context;
   }
   // Verify context is alive — dead Playwright references pass null check
+  // Timeout prevents hanging after sleep/hibernate when WebSocket is broken
   try {
-    const pages = await context.pages();
-    // Also verify page is responsive
+    const pages = await withTimeout(context.pages(), 5000, 'context.pages');
     if (page) {
-      await page.evaluate('1');
+      await withTimeout(page.evaluate('1'), 5000, 'page.evaluate');
     }
   } catch {
-    console.log('浏览器上下文已失效，自动重启...');
+    console.log('浏览器上下文已失效或超时(可能系统休眠), 自动重启...');
     await initBrowser(config.browserHeadless);
   }
   return context;

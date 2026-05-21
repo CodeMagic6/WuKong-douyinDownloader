@@ -1,25 +1,51 @@
-const { getFreshPage } = require('./browser');
+const { getIsolatedPage } = require('./browser');
 const { sleep } = require('./helpers');
+const { getCollectionType } = require('./url-utils');
+
+// Douyin web API endpoints per collection tab type
+var API_PATTERNS = {
+  'watch_later': '/aweme/v1/web/watchlater/list/',
+  'favorite': '/aweme/v1/web/favorite/list/',
+  'post': '/aweme/v1/web/aweme/post/',
+  'profile': '/aweme/v1/web/aweme/post/',
+  'recommend': '/aweme/v1/web/recommend/list/'
+};
 
 async function _extractCore(url, onProgress, isCancelled) {
-  var page = await getFreshPage();
+  var page = await getIsolatedPage();
+  var collType = getCollectionType(url);
+  var expectedApi = API_PATTERNS[collType] || null;
 
   try {
     var allIds = [];
     var apiReceived = false;
 
-    // API intercept — only way to exclude recommended videos
+    // API intercept — capture from known endpoints
     page.on('response', function(resp) {
-      if (!resp.url().includes('/aweme/v1/web/watchlater/list/')) return;
+      var rUrl = resp.url();
+
+      // Match expected endpoint, or any known collection endpoint
+      var matched = false;
+      if (expectedApi && rUrl.includes(expectedApi)) matched = true;
+      if (!matched) {
+        for (var k in API_PATTERNS) {
+          if (rUrl.includes(API_PATTERNS[k])) { matched = true; break; }
+        }
+      }
+      // Fallback: any /aweme/v1/web/ list endpoint
+      if (!matched && /\/aweme\/v1\/web\/\w+\/list\//.test(rUrl)) matched = true;
+
+      if (!matched) return;
       apiReceived = true;
+
       resp.json().then(function(body) {
         if (!body || !body.items) {
           if (body && body.status_code && body.status_code !== 0) {
-            console.log('[collection] API error:', body.status_code, body.status_msg || '');
+            console.log('[collection] API error:', body.status_code, body.status_msg || '', 'url:', rUrl.substring(0, 60));
           }
           return;
         }
-        console.log('[collection] API batch:', body.items.length, 'has_more:', body.has_more);
+        console.log('[collection] API batch:', body.items.length, 'has_more:', body.has_more, 'type:', collType);
         for (var i = 0; i < body.items.length; i++) {
           var id = String(body.items[i].aweme_id || body.items[i].id || '');
           if (id && allIds.indexOf(id) === -1) allIds.push(id);
@@ -27,21 +53,54 @@ async function _extractCore(url, onProgress, isCancelled) {
       }).catch(function() {});
     });
 
-    await page.goto(url, { timeout: 30000, waitUntil: 'domcontentloaded' }).catch(function() {});
+    await page.goto(url, { timeout: 30000, waitUntil: 'domcontentloaded' }).catch(function(e) {
+      console.log('[collection] goto failed:', e.message);
+    });
     if (isCancelled && isCancelled()) return [];
 
-    // Wait for first API batch (up to 8s)
-    for (var w = 0; w < 8; w++) {
+    // Wait for first API batch (up to 15s, checking every 500ms)
+    for (var w = 0; w < 30; w++) {
       if (allIds.length > 0) break;
       if (isCancelled && isCancelled()) return [];
-      await sleep(1000);
+      await sleep(500);
     }
-    console.log('[collection] initial:', allIds.length, 'apiReceived:', apiReceived, 'pageUrl:', page.url().substring(0, 80));
+    console.log('[collection] initial:', allIds.length, 'apiReceived:', apiReceived,
+      'type:', collType, 'expectedApi:', expectedApi,
+      'pageUrl:', (page.url() || '').substring(0, 80));
 
     // No API data — fail fast, don't scroll into a hang
     if (allIds.length === 0) {
-      console.log('[collection] no data, skipping scroll');
-      return [];
+      var msg = '[collection] no data, skipping scroll (type: ' + collType;
+      if (expectedApi) msg += ', api: ' + expectedApi;
+      msg += ', apiReceived: ' + apiReceived + ')';
+      console.log(msg);
+      // Diagnostic: log page state
+      try {
+        var pageTitle = await page.title();
+        var pageUrl = page.url();
+        console.log('[collection] page title:', pageTitle, 'url:', pageUrl.substring(0, 100));
+        // Try one reload in case SPA didn't boot
+        if (!apiReceived && expectedApi) {
+          console.log('[collection] retry: reload page once');
+          await page.reload({ timeout: 30000, waitUntil: 'domcontentloaded' }).catch(function() {});
+          for (var rw = 0; rw < 20; rw++) {
+            if (allIds.length > 0) break;
+            if (isCancelled && isCancelled()) return [];
+            await sleep(500);
+          }
+          if (allIds.length > 0) {
+            console.log('[collection] retry succeeded:', allIds.length);
+          } else {
+            console.log('[collection] retry also got no data');
+            return [];
+          }
+        } else {
+          return [];
+        }
+      } catch(e) {
+        console.log('[collection] diagnostic error:', e.message);
+        return [];
+      }
     }
 
     // Scroll via mouse wheel + container scroll for lazy pagination
@@ -99,7 +158,9 @@ async function _extractCore(url, onProgress, isCancelled) {
     return allIds;
 
   } finally {
+    var ctx = page.__isolatedContext;
     await page.close().catch(function() {});
+    if (ctx) await ctx.close().catch(function() {});
   }
 }
 

@@ -262,7 +262,12 @@ class QueueManager {
       return this._failItem(item, '未找到视频下载地址');
     }
 
-    // Step 4: Download video
+    // Step 4: Download video — stagger start to avoid CDN rate-limit pileup
+    var stagger = this.running * 600; // 600ms per concurrent download
+    if (stagger > 0) {
+      console.log('[queue] stagger download', stagger + 'ms for', item.awemeId);
+      await sleep(stagger);
+    }
     item.status = 'downloading';
     item.startedAt = Date.now();
     item.filename = makeFilename(videoInfo.author.nickname, videoInfo.desc, item.awemeId);
