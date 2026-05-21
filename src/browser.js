@@ -10,6 +10,7 @@ const config = require('../config');
 let browser = null;
 let context = null;
 let page = null;
+let initLock = null;
 
 /** Race a promise against a timeout. Rejects with TimeoutErrorName if timeout fires first. */
 function withTimeout(promise, ms, label) {
@@ -42,6 +43,19 @@ function ensureChromiumInstalled() {
 }
 
 async function initBrowser(headless = config.browserHeadless) {
+  // Deduplicate concurrent init calls — queue up behind lock
+  if (initLock) return initLock;
+  initLock = (async () => {
+    try {
+      return await _initBrowser(headless);
+    } finally {
+      initLock = null;
+    }
+  })();
+  return initLock;
+}
+
+async function _initBrowser(headless) {
   if (browser) {
     try { await browser.close(); } catch {}
   }
@@ -58,7 +72,8 @@ async function initBrowser(headless = config.browserHeadless) {
   // Detect browser disconnect (sleep/hibernate/crash) immediately
   browser.on('disconnected', () => {
     console.log('[浏览器] 检测到浏览器断开连接(可能系统休眠), 已标记失效, 等待自动重启');
-    // Null references so getContext/getPage immediately restart instead of hanging
+    // Null all references so any getter triggers auto-restart
+    browser = null;
     page = null;
     context = null;
   });
@@ -121,7 +136,10 @@ async function getPage() {
 }
 
 async function getFreshPage() {
-  if (!browser) throw new Error('Browser not initialized');
+  if (!browser) {
+    console.log('浏览器未就绪，自动重启...');
+    await initBrowser(config.browserHeadless);
+  }
   const ctx = await getContext();
   const p = await ctx.newPage();
   return p;
@@ -130,6 +148,10 @@ async function getFreshPage() {
 /** Create an isolated context (no shared service workers) for collection extraction.
  *  Copies live cookies from main context so session is fresh, not stale file copy. */
 async function getIsolatedPage() {
+  if (!browser) {
+    console.log('浏览器未就绪，自动重启...');
+    await initBrowser(config.browserHeadless);
+  }
   if (!browser) throw new Error('Browser not initialized');
   var ctx = await browser.newContext({
     viewport: config.viewport,
