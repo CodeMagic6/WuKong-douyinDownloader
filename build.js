@@ -67,6 +67,10 @@ fs.writeFileSync(path.join(DIST, '停止服务.bat'), stopBatContent, 'utf-8');
 const vbsContent = 'CreateObject("WScript.Shell").Run "' + NAME + '", 0, False\n';
 fs.writeFileSync(path.join(DIST, 'launcher.vbs'), vbsContent, 'utf-8');
 
+	// Browser shortcut for manual open
+	const urlContent = '[InternetShortcut]\nURL=http://localhost:3000\n';
+	fs.writeFileSync(path.join(DIST, '打开网页.url'), urlContent, 'utf-8');
+
 console.log('\n=== 构建完成 ===');
 console.log(`输出目录: ${DIST}`);
 console.log(`启动方式: 双击 "启动.exe.bat"`);

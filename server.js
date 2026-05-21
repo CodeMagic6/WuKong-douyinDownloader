@@ -604,13 +604,25 @@ async function start() {
   app.listen(config.port, () => {
     console.log(`\n服务器启动: http://localhost:${config.port}`);
     console.log(`下载目录: ${config.downloadDir}`);
-    // Auto-open browser
-    try {
-      const url = `http://localhost:${config.port}`;
-      const { execSync } = require('child_process');
-      execSync(`start "" "${url}"`, { timeout: 3000 });
-      console.log('已自动打开浏览器');
-    } catch {}
+    // Auto-open browser — try start, rundll32, powershell
+    var _ourl = 'http://localhost:' + config.port;
+    var _ocmds = [
+      { cmd: 'start "" "' + _ourl + '"', label: 'start' },
+      { cmd: 'rundll32 url.dll,FileProtocolHandler "' + _ourl + '"', label: 'rundll32' },
+      { cmd: 'powershell -c Start-Process "' + _ourl + '"', label: 'powershell' },
+    ];
+    var _odone = false;
+    for (var _oi = 0; _oi < _ocmds.length; _oi++) {
+      try {
+        require('child_process').execSync(_ocmds[_oi].cmd, { timeout: 3000, shell: 'cmd.exe' });
+        console.log('自动打开浏览器OK: ' + _ocmds[_oi].label);
+        _odone = true;
+        break;
+      } catch(e) {
+        console.log('自动打开浏览器失败(' + _ocmds[_oi].label + '): ' + e.message);
+      }
+    }
+    if (!_odone) { console.log('请手动打开浏览器: ' + _ourl); }
   });
 }
 
