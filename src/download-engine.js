@@ -24,6 +24,7 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies,
   return new Promise((resolve, reject) => {
     let fd = null;
     let stallTimer = null;
+    let connectTimer = null;
     let cleaned = false;
 
     function cleanupFd() {
@@ -37,6 +38,7 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies,
       if (cleaned) return;
       cleaned = true;
       if (stallTimer) clearTimeout(stallTimer);
+      if (connectTimer) clearTimeout(connectTimer);
       cleanupFd();
       req.destroy();
       reject(msg);
@@ -49,7 +51,15 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies,
     };
     if (cookieStr) headers['Cookie'] = cookieStr;
 
+    // Connection timeout — fires if no response received within 15s (DNS/TCP hang)
+    connectTimer = setTimeout(() => {
+      abortWithError(new Error('连接超时 (15s 无响应)'));
+    }, 15000);
+
     const req = mod.get(videoUrl, { headers, timeout: 30000 }, (res) => {
+      clearTimeout(connectTimer);
+      connectTimer = null;
+
       // Handle redirect
       if (res.statusCode >= 300 && res.statusCode < 400) {
         res.resume();
@@ -146,10 +156,7 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     for (const url of urls) {
       try {
-        const result = await Promise.race([
-          downloadVideo(context, url, destPath, onProgress),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('HTTP 请求超时 (15s 无响应)')), 15000))
-        ]);
+        const result = await downloadVideo(context, url, destPath, onProgress);
         if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
           throw new Error('文件写入验证失败');
         }
@@ -159,10 +166,7 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
         // CDN 403 — retry without cookies
         if (e.message === 'CDN rejected cookies, retry without' || e.message.startsWith('HTTP 403')) {
           try {
-            const result = await Promise.race([
-              downloadVideo(context, url, destPath, onProgress, true),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('HTTP 请求超时 (15s 无响应)')), 15000))
-            ]);
+            const result = await downloadVideo(context, url, destPath, onProgress, true);
             if (!fs.existsSync(destPath) || fs.existsSync(tmp)) throw new Error('verify');
             return result;
           } catch {}
