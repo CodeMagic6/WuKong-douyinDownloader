@@ -182,7 +182,7 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
   }
 
   // Browser fallback (handles WAF / IP block)
-  console.log('[download] HTTP failed, browser download for:', path.basename(destPath));
+  console.log('[download] HTTP failed, browser download for:', path.basename(destPath), 'lastError:', lastError ? lastError.message : 'unknown');
   try {
     const result = await downloadViaBrowser(context, urls[0], destPath, onProgress);
     if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
@@ -201,11 +201,10 @@ async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
   let page = null;
   const tmp = tmpPath(destPath);
   try {
-    page = await context.newPage();
-    await page.goto('https://www.douyin.com/', {
-      waitUntil: 'domcontentloaded', timeout: 15000
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1000));
+    page = await Promise.race([
+      context.newPage(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('浏览器页面创建超时')), 10000))
+    ]);
 
     const escapedUrl = videoUrl.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const result = await Promise.race([
