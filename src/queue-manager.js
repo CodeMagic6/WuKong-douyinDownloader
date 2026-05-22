@@ -302,7 +302,13 @@ class QueueManager {
             status: 'downloading'
           });
         },
-        config.maxRetries
+        config.maxRetries,
+        // Refresh URLs on retry — CDN tokens expire quickly
+        async () => {
+          const freshInfo = await extractVideoMetadata(item.awemeId);
+          item.metadata = freshInfo;
+          return getBestVideoUrl(freshInfo);
+        }
       );
 
       item.status = 'completed';
@@ -348,7 +354,11 @@ class QueueManager {
                 etaSec: item.etaSec, bytesDone: item.bytesDone,
                 bytesTotal: item.bytesTotal, status: 'downloading'
               });
-            }, config.maxRetries);
+            }, config.maxRetries, async () => {
+              const refreshInfo = await extractVideoMetadata(item.awemeId);
+              item.metadata = refreshInfo;
+              return getBestVideoUrl(refreshInfo);
+            });
             item.status = 'completed';
             item.progress = 100;
             item.bytesTotal = result.bytesTotal;
