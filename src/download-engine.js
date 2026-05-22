@@ -12,7 +12,9 @@ function tmpPath(dest) {
   return dest + '.tmp';
 }
 
-async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies) {
+const MAX_REDIRECTS = 5;
+
+async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies, redirectCount = 0) {
   const cookieStr = noCookies ? '' : await getCookieHeader(context);
   const tmp = tmpPath(destPath);
 
@@ -20,6 +22,26 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
   try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
 
   return new Promise((resolve, reject) => {
+    let fd = null;
+    let stallTimer = null;
+    let cleaned = false;
+
+    function cleanupFd() {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+        fd = null;
+      }
+    }
+
+    function abortWithError(msg) {
+      if (cleaned) return;
+      cleaned = true;
+      if (stallTimer) clearTimeout(stallTimer);
+      cleanupFd();
+      req.destroy();
+      reject(msg);
+    }
+
     const mod = getModule(videoUrl);
     const headers = {
       'Referer': 'https://www.douyin.com/',
@@ -31,44 +53,40 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
       // Handle redirect
       if (res.statusCode >= 300 && res.statusCode < 400) {
         res.resume();
+        if (redirectCount >= MAX_REDIRECTS) return abortWithError(new Error('重定向次数过多'));
         const location = res.headers.location;
-        if (!location) return reject(new Error('Redirect with no Location'));
+        if (!location) return abortWithError(new Error('Redirect with no Location'));
         const resolved = location.startsWith('http') ? location : new URL(location, videoUrl).href;
-        // Re-download with resolved URL, same context/cookie params
-        resolve(downloadVideo(context, resolved, destPath, onProgress, noCookies));
+        resolve(downloadVideo(context, resolved, destPath, onProgress, noCookies, redirectCount + 1));
         return;
       }
 
       if (res.statusCode !== 200 && res.statusCode !== 206) {
         res.resume();
         if (cookieStr && (res.statusCode === 403 || res.statusCode === 431)) {
-          return reject(new Error('CDN rejected cookies, retry without'));
+          return abortWithError(new Error('CDN rejected cookies, retry without'));
         }
-        return reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
+        return abortWithError(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
       }
 
       const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
       let bytesDone = 0;
       let lastUpdate = Date.now();
       let lastBytes = 0;
-      let stallTimer = null;
 
       function resetStallTimer() {
         if (stallTimer) clearTimeout(stallTimer);
         stallTimer = setTimeout(() => {
-          req.destroy();
-          reject(new Error('下载停滞 (30s 无数据)'));
+          abortWithError(new Error('下载停滞 (30s 无数据)'));
         }, 30000);
       }
       resetStallTimer();
 
-      let fd;
-      try { fd = fs.openSync(tmp, 'w'); } catch (e) { return reject(e); }
+      try { fd = fs.openSync(tmp, 'w'); } catch (e) { return abortWithError(e); }
       const ws = fs.createWriteStream(tmp, { fd, autoClose: false });
 
       ws.on('error', (e) => {
-        try { fs.closeSync(fd); } catch {}
-        reject(e);
+        abortWithError(e);
       });
 
       res.on('data', (chunk) => {
@@ -92,16 +110,17 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
       });
 
       res.on('error', (e) => {
-        try { fs.closeSync(fd); } catch {}
-        reject(e);
+        abortWithError(e);
       });
 
       res.pipe(ws);
 
       ws.on('finish', () => {
+        if (cleaned) return;
+        cleaned = true;
         if (stallTimer) clearTimeout(stallTimer);
-        try { fs.fsyncSync(fd); } catch (e) { try { fs.closeSync(fd); } catch {} return reject(e); }
-        try { fs.closeSync(fd); } catch (e) { return reject(e); }
+        try { fs.fsyncSync(fd); } catch (e) { cleanupFd(); return reject(e); }
+        cleanupFd();
         try {
           if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
           fs.renameSync(tmp, destPath);
@@ -113,30 +132,37 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
       });
     });
 
-    req.on('error', (e) => reject(e));
+    req.on('error', (e) => abortWithError(e));
     req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Download timeout (30s)'));
+      abortWithError(new Error('Download timeout (30s)'));
     });
   });
 }
 
 async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries = 3) {
   const tmp = tmpPath(destPath);
+  let lastError;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     for (const url of urls) {
       try {
-        const result = await downloadVideo(context, url, destPath, onProgress);
+        const result = await Promise.race([
+          downloadVideo(context, url, destPath, onProgress),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('HTTP 请求超时 (15s 无响应)')), 15000))
+        ]);
         if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
           throw new Error('文件写入验证失败');
         }
         return result;
       } catch (e) {
+        lastError = e;
         // CDN 403 — retry without cookies
         if (e.message === 'CDN rejected cookies, retry without' || e.message.startsWith('HTTP 403')) {
           try {
-            const result = await downloadVideo(context, url, destPath, onProgress, true);
+            const result = await Promise.race([
+              downloadVideo(context, url, destPath, onProgress, true),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('HTTP 请求超时 (15s 无响应)')), 15000))
+            ]);
             if (!fs.existsSync(destPath) || fs.existsSync(tmp)) throw new Error('verify');
             return result;
           } catch {}
@@ -153,7 +179,18 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
 
   // Browser fallback (handles WAF / IP block)
   console.log('[download] HTTP failed, browser download for:', path.basename(destPath));
-  return await downloadViaBrowser(context, urls[0], destPath, onProgress);
+  try {
+    const result = await downloadViaBrowser(context, urls[0], destPath, onProgress);
+    if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+      throw new Error('文件写入失败: 重命名后验证不通过');
+    }
+    return result;
+  } catch (e) {
+    // Throw original HTTP error if browser also fails (gives more context)
+    if (lastError && lastError.message && !e.message.includes('浏览器')) throw lastError;
+    throw e;
+  }
 }
 
 async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
