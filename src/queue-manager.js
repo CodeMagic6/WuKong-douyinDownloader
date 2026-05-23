@@ -389,7 +389,26 @@ class QueueManager {
   }
 
   _broadcastQueue() {
-    this.sse.broadcast('queue_update', { items: this.items });
+    try {
+      // Strip bulky metadata from SSE — frontend only needs status/progress
+      const light = this.items.map(i => ({
+        id: i.id, url: i.url, awemeId: i.awemeId,
+        status: i.status, progress: i.progress,
+        speedBytesPerSec: i.speedBytesPerSec, etaSec: i.etaSec,
+        bytesDone: i.bytesDone, bytesTotal: i.bytesTotal,
+        filename: i.filename, filePath: i.filePath,
+        error: i.error, createdAt: i.createdAt,
+        startedAt: i.startedAt, completedAt: i.completedAt,
+        retryCount: i.retryCount,
+        isCollection: !!i.isCollection,
+        collectionLabel: i.collectionLabel,
+        collectionFound: i.collectionFound,
+        metadata: i.metadata ? { desc: i.metadata.desc, author: i.metadata.author ? { nickname: i.metadata.author.nickname } : null } : null
+      }));
+      this.sse.broadcast('queue_update', { items: light });
+    } catch (e) {
+      console.error('[queue] broadcast error:', e.message);
+    }
   }
 
 }

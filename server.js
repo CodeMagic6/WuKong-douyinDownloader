@@ -72,11 +72,21 @@ app.use(express.static(staticDir));
 
 // Init SSE + Queue
 var shutdownTimer = null;
+var _queueRef = null; // set after QueueManager init; used by auto-shutdown guard
 const sse = new SSEBroadcaster(function() {
   if (shutdownTimer) return;
   shutdownTimer = setTimeout(function() {
     shutdownTimer = null;
     if (sse.getClientCount() > 0) return;
+    // Don't auto-shutdown if queue has active downloads
+    if (_queueRef) {
+      const stats = _queueRef.getStats();
+      if (stats.queueRunning || stats.queueLength > 0) {
+        console.log('[自动退出] 延后: 队列仍有下载任务');
+        shutdownTimer = null; // allow next empty-trigger
+        return;
+      }
+    }
     console.log('[自动退出] 页面已关闭, 清理资源...');
     // Don't stop clipboard here — if browser reconnects we restart it
     stopTmpCleanupTimer();
@@ -105,6 +115,7 @@ const sse = new SSEBroadcaster(function() {
   }, 10000);
 });
 const queue = new QueueManager(config.maxConcurrent, sse);
+_queueRef = queue;
 const clipboardWatcher = new ClipboardWatcher();
 syncClipboardWatcher();
 
@@ -120,8 +131,10 @@ function syncClipboardWatcher() {
 }
 
 // Remove stale .tmp files left by previous crashed instances
+// Skips files modified within last 5 min (actively being downloaded)
 function cleanupStaleTmpFiles(dir) {
   try {
+    const now = Date.now();
     const files = fs.readdirSync(dir, { withFileTypes: true });
     for (const f of files) {
       if (f.isDirectory()) {
@@ -130,6 +143,10 @@ function cleanupStaleTmpFiles(dir) {
       }
       if (f.name.endsWith('.tmp')) {
         const fullPath = path.join(dir, f.name);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (now - stat.mtimeMs < 300000) continue; // skip active download
+        } catch {}
         fs.unlinkSync(fullPath);
         console.log(`清理残留 .tmp: ${f.name}`);
       }
