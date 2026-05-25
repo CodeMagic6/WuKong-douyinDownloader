@@ -64,14 +64,27 @@ function getBestVideoUrl(videoInfo) {
 let apiPage = null;
 let apiPageLock = null; // promise-based mutex for concurrent access
 
+function timeoutRace(ms, msg) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error(msg || `超时 ${ms}ms`)), ms));
+}
+
 async function getApiPage() {
-  // Wait for any in-progress page init
-  while (apiPageLock) await apiPageLock;
+  // Wait for any in-progress page init (with timeout to prevent cascade hang)
+  if (apiPageLock) {
+    try {
+      await Promise.race([apiPageLock, timeoutRace(30000, 'getApiPage 等待锁超时')]);
+    } catch {
+      apiPageLock = null;
+    }
+  }
 
   const { getContext } = require('./browser');
   if (apiPage) {
     try {
-      await apiPage.evaluate('document.location.origin');
+      await Promise.race([
+        apiPage.evaluate('document.location.origin'),
+        timeoutRace(5000, 'API 页面健康检查超时')
+      ]);
       return apiPage;
     } catch {
       await apiPage.close().catch(() => {});
@@ -80,11 +93,15 @@ async function getApiPage() {
   }
 
   // Lock to prevent concurrent creation
+  // Wrap entire init in a race so lock always releases
   apiPageLock = (async () => {
     try {
       const ctx = await getContext();
       if (!ctx) throw new Error('Browser context not available');
-      apiPage = await ctx.newPage();
+      apiPage = await Promise.race([
+        ctx.newPage(),
+        timeoutRace(15000, '创建 API 页面超时')
+      ]);
       await apiPage.goto('https://www.douyin.com/', {
         waitUntil: 'domcontentloaded', timeout: 20000
       }).catch(() => {});
@@ -94,7 +111,14 @@ async function getApiPage() {
       apiPageLock = null;
     }
   })();
-  return await apiPageLock;
+
+  // Overall timeout: prevent lock never releasing
+  try {
+    return await Promise.race([apiPageLock, timeoutRace(30000, 'API 页面初始化整体超时')]);
+  } catch (e) {
+    apiPageLock = null;
+    throw e;
+  }
 }
 
 async function extractVideoMetadata(awemeId) {

@@ -101,15 +101,15 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
           const elapsed = now - lastUpdate;
           if (elapsed >= 200) {
             const speed = (bytesDone - lastBytes) / (elapsed / 1000);
-            const remaining = totalBytes - bytesDone;
-            const eta = speed > 0 ? remaining / speed : 0;
+            const remaining = totalBytes > 0 ? totalBytes - bytesDone : 0;
+            const eta = speed > 0 && totalBytes > 0 ? remaining / speed : 0;
             if (onProgress) {
               onProgress({
                 bytesDone,
                 bytesTotal: totalBytes || bytesDone,
                 speed,
                 eta,
-                percent: totalBytes ? Math.min(100, (bytesDone / totalBytes) * 100) : 0
+                percent: totalBytes > 0 ? Math.min(100, (bytesDone / totalBytes) * 100) : 0
               });
             }
             lastUpdate = now;
@@ -169,10 +169,7 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
       : urls;
     for (let i = 0; i < attemptUrls.length; i++) {
       try {
-        const result = await Promise.race([
-          downloadVideo(context, attemptUrls[i], destPath, onProgress),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('HTTP 请求超时 (15s 无响应)')), 15000))
-        ]);
+        const result = await downloadVideo(context, attemptUrls[i], destPath, onProgress);
         if (!fs.existsSync(destPath) || fs.existsSync(tmp)) {
           throw new Error('文件写入失败: 重命名后验证不通过');
         }
@@ -186,10 +183,7 @@ async function downloadWithRetry(context, urls, destPath, onProgress, maxRetries
         if (e.message === 'CDN rejected cookies, retry without' || e.message.startsWith('HTTP 403')) {
           console.log('[download] retry without cookies for:', path.basename(destPath));
           try {
-            const result = await Promise.race([
-              downloadVideo(context, attemptUrls[i], destPath, onProgress, true),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('HTTP 请求超时 (15s 无响应)')), 15000))
-            ]);
+            const result = await downloadVideo(context, attemptUrls[i], destPath, onProgress, true);
             if (!fs.existsSync(destPath) || fs.existsSync(tmp)) throw 'verify';
             return result;
           } catch (e2) {
@@ -226,11 +220,10 @@ async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
   let page = null;
   const tmp = tmpPath(destPath);
   try {
-    page = await context.newPage();
-    await page.goto('https://www.douyin.com/', {
-      waitUntil: 'domcontentloaded', timeout: 15000
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1000));
+    page = await Promise.race([
+      context.newPage(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('浏览器页面创建超时')), 10000))
+    ]);
 
     console.log('[download] browser fallback, url:', (videoUrl || '').substring(0, 60));
     const escapedUrl = videoUrl.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -241,7 +234,7 @@ async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
         var buf = await res.arrayBuffer();
         return Array.from(new Uint8Array(buf));
       })()`),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('浏览器下载超时 (15s)')), 15000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('浏览器下载超时 (30s)')), 30000))
     ]);
 
     if (!Array.isArray(result) || result.length === 0) throw new Error('Browser download returned empty');
