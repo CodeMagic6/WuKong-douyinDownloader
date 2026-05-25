@@ -44,23 +44,12 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
         }
       }
 
-      let connectTimer = null;
-
       function cleanupAndReject(msg) {
-        if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
         closeFd();
         reject(msg);
       }
 
-      // Connection timeout — fires if no response within 15s (DNS/TCP/TLS stall)
-      connectTimer = setTimeout(function() {
-        connectTimer = null;
-        try { req.destroy(); } catch {}
-        reject(new Error('连接超时 (15s 无响应)'));
-      }, 15000);
-
-      const req = mod.get(url, { headers, timeout: 20000 }, (res) => {
-        if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      const req = mod.get(url, { headers, timeout: 10000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400) {
           res.resume();
           console.log('[download] redirect', res.statusCode, 'to:', (res.headers.location || '').substring(0, 60));
@@ -159,7 +148,7 @@ async function downloadVideo(context, videoUrl, destPath, onProgress, noCookies)
       req.on('error', (e) => cleanupAndReject(e));
       req.on('timeout', () => {
         req.destroy();
-        cleanupAndReject(new Error('Download timeout (20s)'));
+        cleanupAndReject(new Error('Download timeout (10s)'));
       });
     }
 
