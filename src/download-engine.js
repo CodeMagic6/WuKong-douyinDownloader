@@ -1,5 +1,3 @@
-const https = require('https');
-const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
@@ -7,72 +5,66 @@ function tmpPath(dest) {
   return dest + '.tmp';
 }
 
-/** Primary download: use browser network stack (handles auth, WAF, IP blocks) */
+/** Primary download: use browser fetch API (handles auth, WAF, IP blocks, cookies) */
 async function downloadViaBrowser(context, videoUrl, destPath, onProgress) {
   let page = null;
   const tmp = tmpPath(destPath);
   try {
     page = await context.newPage();
-    // Set referer so CDN serves the video (many check douyin.com referer)
     await page.setExtraHTTPHeaders({ 'Referer': 'https://www.douyin.com/' });
-    console.log('[download] browser goto:', (videoUrl || '').substring(0, 80));
+    // Navigate so page has proper origin/cookies in its realm for fetch
+    await page.goto('https://www.douyin.com/', {
+      waitUntil: 'domcontentloaded', timeout: 10000
+    }).catch(() => {});
 
-    // Navigate directly to video URL. cookies from context included automatically.
-    // 'commit' fires as soon as server responds with headers — no wait for full load.
-    const resp = await page.goto(videoUrl, {
-      waitUntil: 'commit',
-      timeout: 30000
-    });
-    if (!resp) throw new Error('no response');
+    console.log('[download] browser fetch url:', (videoUrl || '').substring(0, 80));
 
-    const totalBytes = parseInt(resp.headers()['content-length'] || '0', 10);
-    console.log('[download] response OK, content-length:', totalBytes);
+    const escapedUrl = videoUrl.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const result = await Promise.race([
+      page.evaluate(`(async function() {
+        try {
+          var res = await fetch('${escapedUrl}', {
+            credentials: 'include',
+            headers: { 'Referer': 'https://www.douyin.com/' }
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          var total = parseInt(res.headers.get('content-length') || '0', 10);
+          var buf = await res.arrayBuffer();
+          var bytes = new Uint8Array(buf);
+          var len = bytes.length;
+          // Chunked binary-string build → base64 (much faster than Array.from)
+          var parts = [];
+          for (var i = 0; i < len; i += 8192) {
+            var end = Math.min(i + 8192, len);
+            parts.push(String.fromCharCode.apply(null, bytes.subarray(i, end)));
+          }
+          return { b64: btoa(parts.join('')), total: total || len };
+        } catch(e) {
+          return { error: e.message };
+        }
+      })()`),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('浏览器下载超时 (120s)')), 120000))
+    ]);
+
+    if (!result || result.error) throw new Error(result?.error || 'empty response');
+    if (!result.b64) throw new Error('empty data');
 
     if (onProgress) {
-      onProgress({ percent: 0, bytesDone: 0, bytesTotal: totalBytes || 1, speed: 0, eta: 0 });
+      onProgress({ percent: 0, bytesDone: 0, bytesTotal: result.total || 1, speed: 0, eta: 0 });
     }
-    const buf = await resp.body();
 
-    fs.writeFileSync(tmp, buf);
+    fs.writeFileSync(tmp, Buffer.from(result.b64, 'base64'));
     try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
     fs.renameSync(tmp, destPath);
     const size = fs.statSync(destPath).size;
-    console.log('[download] browser success:', path.basename(destPath), size, 'bytes');
+    console.log('[download] browser fetch success:', path.basename(destPath), size, 'bytes');
     if (onProgress) {
       onProgress({ percent: 100, bytesDone: size, bytesTotal: size, speed: 0, eta: 0 });
     }
     return { bytesTotal: size, filePath: destPath };
   } catch (e) {
-    console.log('[download] browser goto failed:', e.message);
-    // Fallback: page.evaluate fetch (without goto douyin.com)
-    try {
-      if (page) await page.close().catch(() => {});
-      page = await context.newPage();
-      await page.setExtraHTTPHeaders({ 'Referer': 'https://www.douyin.com/' });
-      console.log('[download] browser fetch fallback, url:', (videoUrl || '').substring(0, 60));
-      const escapedUrl = videoUrl.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      const result = await Promise.race([
-        page.evaluate(`(async function() {
-          const res = await fetch('${escapedUrl}', { credentials: 'include' });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          var buf = await res.arrayBuffer();
-          return Array.from(new Uint8Array(buf));
-        })()`),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('浏览器下载超时 (30s)')), 30000))
-      ]);
-      if (!Array.isArray(result) || result.length === 0) throw new Error('empty');
-      fs.writeFileSync(tmp, Buffer.from(result));
-      try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
-      fs.renameSync(tmp, destPath);
-      const size2 = fs.statSync(destPath).size;
-      console.log('[download] browser fetch fallback success:', path.basename(destPath), size2, 'bytes');
-      if (onProgress) {
-        onProgress({ percent: 100, bytesDone: size2, bytesTotal: size2, speed: 0, eta: 0 });
-      }
-      return { bytesTotal: size2, filePath: destPath };
-    } catch (e2) {
-      throw e2;
-    }
+    console.log('[download] browser fetch failed:', e.message);
+    throw e;
   } finally {
     if (page) await page.close().catch(() => {});
   }
