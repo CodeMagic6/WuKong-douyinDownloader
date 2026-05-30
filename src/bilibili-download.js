@@ -1,7 +1,19 @@
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
-const { getContext } = require('./browser');
+const path = require('path');
+const os = require('os');
+
+const bilibiliCookieFile = path.join(os.homedir(), '.claude', 'bilibili_cookies.json');
+
+function getBilibiliCookieHeader() {
+  try {
+    const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+    const cookies = JSON.parse(raw);
+    return cookies.map(c => c.name + '=' + c.value).join('; ');
+  } catch {}
+  return '';
+}
 
 const BILIBILI_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -16,7 +28,7 @@ function tmpPath(dest) { return dest + '.tmp'; }
 function downloadFileNative(url, destPath, onProgress) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
-    const reqHeaders = { ...BILIBILI_HEADERS };
+    const reqHeaders = { ...BILIBILI_HEADERS, 'Cookie': getBilibiliCookieHeader() };
 
     const doRequest = (reqUrl, redirectCount) => {
       if (redirectCount > 5) return reject(new Error('重定向次数过多'));
