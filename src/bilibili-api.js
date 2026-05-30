@@ -270,7 +270,7 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
   const allVideos = [];
   let collectionTitle = '';
   let pn = 1;
-  const ps = 20;
+  const ps = 40;
   let hasMore = true;
 
   while (hasMore) {
@@ -307,6 +307,7 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
 
       if (!data.medias || data.medias.length === 0) break;
 
+      let added = 0;
       for (const m of data.medias) {
         if (m.bvid) {
           if (!allVideos.find(v => v.bvid === m.bvid)) {
@@ -315,14 +316,17 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
               title: (m.title || '').substring(0, 100),
               author: m.upper?.name || ''
             });
+            added++;
           }
+        } else {
+          console.log('[bilibili-collection] skip no-bvid:', m.title, 'type:', m.type);
         }
       }
 
       hasMore = data.has_more === true;
       pn++;
 
-      console.log('[bilibili-collection] page', pn - 1, 'videos:', allVideos.length, 'has_more:', hasMore);
+      console.log('[bilibili-collection] page', pn - 1, 'medias:', data.medias.length, 'added:', added, 'total:', allVideos.length, 'has_more:', hasMore);
       if (onProgress) onProgress(allVideos.length, pn);
       await sleep(800);
     } catch (e) {
