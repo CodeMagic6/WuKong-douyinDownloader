@@ -308,7 +308,7 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
       if (!data.medias || data.medias.length === 0) break;
 
       for (const m of data.medias) {
-        if (m.bvid && m.type === 2) {
+        if (m.bvid) {
           if (!allVideos.find(v => v.bvid === m.bvid)) {
             allVideos.push({
               bvid: m.bvid,
