@@ -73,10 +73,15 @@ function downloadFileNative(url, destPath, onProgress) {
       if (total === 0) return reject(new Error('无法获取文件大小'));
 
       const fs = require('fs');
-      const fileStream = fs.createWriteStream(destPath);
-      let downloaded = 0;
+      // Check existing file size for resume
+      let existingSize = 0;
+      if (fs.existsSync(destPath)) {
+        try { existingSize = fs.statSync(destPath).size; } catch {}
+      }
+      const fileStream = fs.createWriteStream(destPath, { flags: existingSize > 0 ? 'a' : 'w' });
+      let downloaded = existingSize;
       let lastTime = Date.now();
-      let lastBytes = 0;
+      let lastBytes = downloaded;
 
       const downloadNext = (chunkIndex) => {
         const start = chunkIndex * CHUNK_SIZE;
@@ -84,6 +89,12 @@ function downloadFileNative(url, destPath, onProgress) {
           fileStream.end();
           if (onProgress) onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: total, speed: 0, eta: 0 });
           return resolve({ bytesTotal: total });
+        }
+
+        // Skip chunks that are already downloaded
+        if (start < existingSize) {
+          downloadNext(chunkIndex + 1);
+          return;
         }
 
         const end = Math.min(start + CHUNK_SIZE - 1, total - 1);
@@ -133,7 +144,6 @@ async function downloadBilibiliVideo(playUrlData, destPath, onProgress) {
   const doDownload = async (url) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
         const result = await downloadFileNative(url, tmp, onProgress);
         try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
         fs.renameSync(tmp, destPath);
