@@ -26,97 +26,104 @@ const BILIBILI_HEADERS = {
 function tmpPath(dest) { return dest + '.tmp'; }
 
 function downloadFileNative(url, destPath, onProgress) {
+  const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB per chunk
+
   return new Promise((resolve, reject) => {
     const reqHeaders = { ...BILIBILI_HEADERS, 'Cookie': getBilibiliCookieHeader() };
 
-    const doRequest = (reqUrl, redirectCount, startByte) => {
-      if (redirectCount > 5) return reject(new Error('重定向次数过多'));
-
-      const headers = { ...reqHeaders };
-      if (startByte > 0) headers['Range'] = 'bytes=' + startByte + '-';
-
+    // First request to get total size
+    const headReq = (reqUrl, cb) => {
       const c = reqUrl.startsWith('https') ? https : http;
-      c.get(reqUrl, { headers, timeout: 30000 }, (res) => {
+      c.get(reqUrl, { headers: { ...reqHeaders, 'Range': 'bytes=0-0' }, timeout: 30000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
-          doRequest(res.headers.location, redirectCount + 1, startByte);
+          headReq(res.headers.location, cb);
+          return;
+        }
+        const range = res.headers['content-range'] || '';
+        const total = parseInt(range.split('/')[1], 10) || parseInt(res.headers['content-length'] || '0', 10) || 0;
+        res.resume();
+        cb(null, total);
+      }).on('error', cb);
+    };
+
+    const downloadChunk = (reqUrl, start, end, cb) => {
+      const headers = { ...reqHeaders, 'Range': 'bytes=' + start + '-' + end };
+      const c = reqUrl.startsWith('https') ? https : http;
+      c.get(reqUrl, { headers, timeout: 60000 }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          downloadChunk(res.headers.location, start, end, cb);
           return;
         }
         if (res.statusCode !== 200 && res.statusCode !== 206) {
           res.resume();
-          reject(new Error('HTTP ' + res.statusCode));
+          cb(new Error('HTTP ' + res.statusCode));
           return;
         }
-
-        const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
-        const contentTotal = res.headers['content-range']
-          ? parseInt(res.headers['content-range'].split('/')[1], 10)
-          : total;
-        let downloaded = startByte;
-        let lastTime = Date.now();
-        let lastBytes = downloaded;
-        let lastLogTime = 0;
-
-        const fileStream = fs.createWriteStream(destPath, { flags: startByte > 0 ? 'a' : 'w' });
-
-        res.on('data', (chunk) => {
-          downloaded += chunk.length;
-          fileStream.write(chunk);
-
-          if (onProgress) {
-            const now = Date.now();
-            const timeDiff = (now - lastTime) / 1000;
-            if (timeDiff >= 1) {
-              const speed = (downloaded - lastBytes) / timeDiff;
-              const percent = contentTotal ? (downloaded / contentTotal * 100) : 0;
-              const eta = speed > 0 ? (contentTotal - downloaded) / speed : 0;
-              onProgress({ percent, bytesDone: downloaded, bytesTotal: contentTotal, speed, eta });
-              lastTime = now;
-              lastBytes = downloaded;
-            }
-            if (now - lastLogTime > 30000) {
-              console.log('[bilibili-download]', (downloaded / 1024 / 1024).toFixed(1) + 'MB / ' + (contentTotal / 1024 / 1024).toFixed(1) + 'MB');
-              lastLogTime = now;
-            }
-          }
-        });
-
-        res.on('end', () => {
-          fileStream.end();
-          if (downloaded < contentTotal) {
-            console.log('[bilibili-download] incomplete, resume from', downloaded);
-            doRequest(reqUrl, 0, downloaded);
-            return;
-          }
-          console.log('[bilibili-download] done:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
-          if (onProgress) {
-            onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: contentTotal, speed: 0, eta: 0 });
-          }
-          resolve({ bytesTotal: contentTotal });
-        });
-
-        res.on('error', (e) => {
-          console.error('[bilibili-download] stream error:', e.message, 'at:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
-          fileStream.end();
-          // Resume from where we left off
-          if (downloaded > 0 && downloaded < contentTotal) {
-            console.log('[bilibili-download] resuming from', downloaded);
-            doRequest(reqUrl, 0, downloaded);
-          } else {
-            reject(e);
-          }
-        });
-      }).on('error', (e) => {
-        console.error('[bilibili-download] request error:', e.message);
-        reject(e);
-      }).on('timeout', function() {
-        console.error('[bilibili-download] connection timeout');
-        this.destroy();
-        reject(new Error('连接超时'));
-      });
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+        res.on('error', cb);
+      }).on('error', cb).on('timeout', function() { this.destroy(); cb(new Error('timeout')); });
     };
 
-    doRequest(url, 0, 0);
+    headReq(url, (err, total) => {
+      if (err) return reject(err);
+      if (total === 0) return reject(new Error('无法获取文件大小'));
+
+      const fs = require('fs');
+      const fileStream = fs.createWriteStream(destPath);
+      let downloaded = 0;
+      let lastTime = Date.now();
+      let lastBytes = 0;
+
+      const downloadNext = (chunkIndex) => {
+        const start = chunkIndex * CHUNK_SIZE;
+        if (start >= total) {
+          fileStream.end();
+          if (onProgress) onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: total, speed: 0, eta: 0 });
+          return resolve({ bytesTotal: total });
+        }
+
+        const end = Math.min(start + CHUNK_SIZE - 1, total - 1);
+
+        const tryDownload = (attempt) => {
+          downloadChunk(url, start, end, (err, buf) => {
+            if (err) {
+              if (attempt < 3) {
+                setTimeout(() => tryDownload(attempt + 1), 1000);
+                return;
+              }
+              fileStream.end();
+              return reject(err);
+            }
+
+            fileStream.write(buf);
+            downloaded += buf.length;
+
+            if (onProgress) {
+              const now = Date.now();
+              const timeDiff = (now - lastTime) / 1000;
+              if (timeDiff >= 0.5) {
+                const speed = (downloaded - lastBytes) / timeDiff;
+                const percent = (downloaded / total * 100);
+                const eta = speed > 0 ? (total - downloaded) / speed : 0;
+                onProgress({ percent, bytesDone: downloaded, bytesTotal: total, speed, eta });
+                lastTime = now;
+                lastBytes = downloaded;
+              }
+            }
+
+            downloadNext(chunkIndex + 1);
+          });
+        };
+
+        tryDownload(0);
+      };
+
+      downloadNext(0);
+    });
   });
 }
 
