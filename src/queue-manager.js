@@ -274,6 +274,7 @@ class QueueManager {
           added: added.length
         });
         this._broadcastQueue();
+        setImmediate(() => this._processQueue());
       } catch (e) {
         return this._failItem(item, `B站合集解析失败: ${e.message}`);
       }
@@ -338,6 +339,7 @@ class QueueManager {
           added: added.length
         });
         this._broadcastQueue();
+        setImmediate(() => this._processQueue());
       } catch (e) {
         return this._failItem(item, `合集解析失败: ${e.message}`);
       }
