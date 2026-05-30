@@ -48,7 +48,7 @@ const batContent = `@echo off
 title Douyin Downloader
 echo Starting...
 wscript.exe "%~dp0launcher.vbs"
-echo Open http://localhost:3000 in browser
+echo Open http://localhost:9090 in browser
 echo Stop: double-click stop.bat
 pause
 `;
@@ -68,7 +68,7 @@ const vbsContent = 'CreateObject("WScript.Shell").Run "' + NAME + '", 0, False\n
 fs.writeFileSync(path.join(DIST, 'launcher.vbs'), vbsContent, 'utf-8');
 
 	// Browser shortcut for manual open
-	const urlContent = '[InternetShortcut]\nURL=http://localhost:3000\n';
+	const urlContent = '[InternetShortcut]\nURL=http://localhost:9090\n';
 	fs.writeFileSync(path.join(DIST, '打开网页.url'), urlContent, 'utf-8');
 
 console.log('\n=== 构建完成 ===');

@@ -7,7 +7,7 @@ const baseDir = typeof process.pkg !== 'undefined'
   : __dirname;
 
 module.exports = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: parseInt(process.env.PORT || '9090', 10),
   defaultDownloadDir: path.join(baseDir, 'downloads'),
   downloadDir: path.join(baseDir, 'downloads'),
   customDownloadDir: '',
