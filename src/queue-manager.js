@@ -597,7 +597,7 @@ class QueueManager {
         collectionFound: i.collectionFound,
         collectionFolder: i.collectionFolder || '',
         metadata: i.metadata ? {
-          desc: i.metadata.desc || i.metadata.title,
+          desc: i.metadata.title || i.metadata.desc,
           author: i.metadata.author ? { nickname: i.metadata.author.nickname || i.metadata.author.name } : null
         } : null
       }));
