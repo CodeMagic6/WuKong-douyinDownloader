@@ -38,6 +38,7 @@ function downloadFileNative(url, destPath, onProgress) {
         let downloaded = 0;
         let lastTime = Date.now();
         let lastBytes = 0;
+        let lastLogTime = 0;
 
         const fileStream = fs.createWriteStream(destPath);
 
@@ -56,11 +57,17 @@ function downloadFileNative(url, destPath, onProgress) {
               lastTime = now;
               lastBytes = downloaded;
             }
+            // Log every 30 seconds
+            if (now - lastLogTime > 30000) {
+              console.log('[bilibili-download]', (downloaded / 1024 / 1024).toFixed(1) + 'MB / ' + (total / 1024 / 1024).toFixed(1) + 'MB');
+              lastLogTime = now;
+            }
           }
         });
 
         res.on('end', () => {
           fileStream.end();
+          console.log('[bilibili-download] done:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
           if (onProgress) {
             onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: total || downloaded, speed: 0, eta: 0 });
           }
@@ -68,10 +75,15 @@ function downloadFileNative(url, destPath, onProgress) {
         });
 
         res.on('error', (e) => {
+          console.error('[bilibili-download] stream error:', e.message, 'downloaded:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
           fileStream.end();
           reject(e);
         });
-      }).on('error', reject).on('timeout', function() {
+      }).on('error', (e) => {
+        console.error('[bilibili-download] request error:', e.message);
+        reject(e);
+      }).on('timeout', function() {
+        console.error('[bilibili-download] connection timeout');
         this.destroy();
         reject(new Error('连接超时'));
       });
