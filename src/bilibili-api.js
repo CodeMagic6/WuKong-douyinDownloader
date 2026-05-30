@@ -90,8 +90,18 @@ async function fetchJsonViaBrowser(page, url) {
 
 async function fetchVideoInfo(bvid) {
   for (let attempt = 0; attempt < 3; attempt++) {
+    let page = null;
     try {
-      const page = await getBilibiliPage();
+      const ctx = await getContext();
+      if (!ctx) throw new Error('Browser context not available');
+      // Load bilibili cookies
+      try {
+        const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+        const cookies = JSON.parse(raw);
+        if (cookies.length > 0) await ctx.addCookies(cookies);
+      } catch {}
+      page = await ctx.newPage();
+      await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       const url = makeVideoInfoUrl(bvid);
       const resp = await Promise.race([
         fetchJsonViaBrowser(page, url),
@@ -135,21 +145,30 @@ async function fetchVideoInfo(bvid) {
         }))
       };
     } catch (e) {
-      const isContextError = /context was destroyed|navigation|Execution context|Cannot read properties of null/i.test(e.message);
-      if (isContextError && attempt < 2) {
-        if (bilibiliPage) { try { await bilibiliPage.close().catch(() => {}); } catch {} bilibiliPage = null; }
+      if (attempt < 2) {
         await sleep(1000 * (attempt + 1));
         continue;
       }
       throw e;
+    } finally {
+      if (page) await page.close().catch(() => {});
     }
   }
 }
 
 async function fetchPlayUrl(bvid, cid, qn = 64) {
   for (let attempt = 0; attempt < 3; attempt++) {
+    let page = null;
     try {
-      const page = await getBilibiliPage();
+      const ctx = await getContext();
+      if (!ctx) throw new Error('Browser context not available');
+      try {
+        const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+        const cookies = JSON.parse(raw);
+        if (cookies.length > 0) await ctx.addCookies(cookies);
+      } catch {}
+      page = await ctx.newPage();
+      await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       const url = makePlayUrl(bvid, cid, qn, 1);
       const resp = await Promise.race([
         fetchJsonViaBrowser(page, url),
@@ -201,13 +220,13 @@ async function fetchPlayUrl(bvid, cid, qn = 64) {
 
       throw new Error('未找到可用的视频流');
     } catch (e) {
-      const isContextError = /context was destroyed|navigation|Execution context|Cannot read properties of null/i.test(e.message);
-      if (isContextError && attempt < 2) {
-        if (bilibiliPage) { try { await bilibiliPage.close().catch(() => {}); } catch {} bilibiliPage = null; }
+      if (attempt < 2) {
         await sleep(1000 * (attempt + 1));
         continue;
       }
       throw e;
+    } finally {
+      if (page) await page.close().catch(() => {});
     }
   }
 }
