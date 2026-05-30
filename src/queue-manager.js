@@ -368,15 +368,7 @@ class QueueManager {
       const safeTitle = (videoData.info.title || item.bvid).replace(/[\\/:*?"<>|]/g, '_').substring(0, 80);
       item.filename = `${videoData.info.author.name}_${safeTitle}_${item.bvid}.mp4`;
       try {
-        // If video has multiple pages, create subfolder
-        let downloadDir = config.downloadDir;
-        if (videoData.info.pages && videoData.info.pages.length > 1) {
-          const videoFolder = path.join(config.downloadDir, safeTitle);
-          if (!fs.existsSync(videoFolder)) {
-            fs.mkdirSync(videoFolder, { recursive: true });
-          }
-          downloadDir = videoFolder;
-        }
+        let downloadDir = item.collectionFolder || config.downloadDir;
         item.filePath = path.join(downloadDir, item.filename);
       } catch {
         item.filePath = path.join(process.cwd(), 'downloads', item.filename);

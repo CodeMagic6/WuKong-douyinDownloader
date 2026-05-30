@@ -89,96 +89,127 @@ async function fetchJsonViaBrowser(page, url) {
 }
 
 async function fetchVideoInfo(bvid) {
-  const page = await getBilibiliPage();
-  const url = makeVideoInfoUrl(bvid);
-  const resp = await fetchJsonViaBrowser(page, url);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const page = await getBilibiliPage();
+      const url = makeVideoInfoUrl(bvid);
+      const resp = await Promise.race([
+        fetchJsonViaBrowser(page, url),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('API 请求超时 (15s)')), 15000))
+      ]);
 
-  if (!resp || resp.code !== 0) {
-    throw new Error(`B站 API 错误: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
+      if (!resp || resp.code !== 0) {
+        throw new Error(`B站 API 错误: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
+      }
+
+      const data = resp.data;
+      if (!data) throw new Error('视频数据为空');
+
+      return {
+        bvid: data.bvid,
+        aid: data.aid,
+        cid: data.cid,
+        title: data.title || '',
+        desc: data.desc || '',
+        duration: data.duration || 0,
+        cover: data.pic || '',
+        author: {
+          mid: data.owner?.mid || 0,
+          name: data.owner?.name || '未知作者',
+          face: data.owner?.face || ''
+        },
+        stat: {
+          view: data.stat?.view || 0,
+          danmaku: data.stat?.danmaku || 0,
+          reply: data.stat?.reply || 0,
+          favorite: data.stat?.favorite || 0,
+          coin: data.stat?.coin || 0,
+          share: data.stat?.share || 0,
+          like: data.stat?.like || 0
+        },
+        pages: (data.pages || []).map(p => ({
+          cid: p.cid,
+          page: p.page,
+          part: p.part || '',
+          duration: p.duration || 0
+        }))
+      };
+    } catch (e) {
+      const isContextError = /context was destroyed|navigation|Execution context|Cannot read properties of null/i.test(e.message);
+      if (isContextError && attempt < 2) {
+        if (bilibiliPage) { try { await bilibiliPage.close().catch(() => {}); } catch {} bilibiliPage = null; }
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
+      throw e;
+    }
   }
-
-  const data = resp.data;
-  if (!data) throw new Error('视频数据为空');
-
-  return {
-    bvid: data.bvid,
-    aid: data.aid,
-    cid: data.cid,
-    title: data.title || '',
-    desc: data.desc || '',
-    duration: data.duration || 0,
-    cover: data.pic || '',
-    author: {
-      mid: data.owner?.mid || 0,
-      name: data.owner?.name || '未知作者',
-      face: data.owner?.face || ''
-    },
-    stat: {
-      view: data.stat?.view || 0,
-      danmaku: data.stat?.danmaku || 0,
-      reply: data.stat?.reply || 0,
-      favorite: data.stat?.favorite || 0,
-      coin: data.stat?.coin || 0,
-      share: data.stat?.share || 0,
-      like: data.stat?.like || 0
-    },
-    pages: (data.pages || []).map(p => ({
-      cid: p.cid,
-      part: p.part || '',
-      duration: p.duration || 0
-    }))
-  };
 }
 
 async function fetchPlayUrl(bvid, cid, qn = 64) {
-  const page = await getBilibiliPage();
-  const url = makePlayUrl(bvid, cid, qn, 1);
-  const resp = await fetchJsonViaBrowser(page, url);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const page = await getBilibiliPage();
+      const url = makePlayUrl(bvid, cid, qn, 1);
+      const resp = await Promise.race([
+        fetchJsonViaBrowser(page, url),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('API 请求超时 (15s)')), 15000))
+      ]);
 
-  if (!resp || resp.code !== 0) {
-    throw new Error(`播放地址获取失败: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
+      if (!resp || resp.code !== 0) {
+        throw new Error(`播放地址获取失败: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
+      }
+
+      const data = resp.data;
+      if (!data) throw new Error('播放地址数据为空');
+
+      if (data.dash) {
+        const dash = data.dash;
+        const videoStreams = (dash.video || []).filter(v => v.baseUrl || v.base_url);
+        const audioStreams = (dash.audio || []).filter(a => a.baseUrl || a.base_url);
+
+        return {
+          type: 'dash',
+          video: videoStreams.map(v => ({
+            id: v.id,
+            baseUrl: v.baseUrl || v.base_url,
+            bandwidth: v.bandwidth,
+            width: v.width,
+            height: v.height,
+            codecs: v.codecs,
+            mimeType: v.mimeType || v.mime_type
+          })),
+          audio: audioStreams.map(a => ({
+            id: a.id,
+            baseUrl: a.baseUrl || a.base_url,
+            bandwidth: a.bandwidth,
+            codecs: a.codecs,
+            mimeType: a.mimeType || a.mime_type
+          })),
+          duration: data.dash.duration || 0
+        };
+      }
+
+      if (data.durl && data.durl.length > 0) {
+        return {
+          type: 'mp4',
+          url: data.durl[0].url,
+          size: data.durl[0].size,
+          duration: data.durl[0].length
+        };
+      }
+
+      throw new Error('未找到可用的视频流');
+    } catch (e) {
+      const isContextError = /context was destroyed|navigation|Execution context|Cannot read properties of null/i.test(e.message);
+      if (isContextError && attempt < 2) {
+        if (bilibiliPage) { try { await bilibiliPage.close().catch(() => {}); } catch {} bilibiliPage = null; }
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
+      throw e;
+    }
   }
-
-  const data = resp.data;
-  if (!data) throw new Error('播放地址数据为空');
-
-  if (data.dash) {
-    const dash = data.dash;
-    const videoStreams = (dash.video || []).filter(v => v.baseUrl || v.base_url);
-    const audioStreams = (dash.audio || []).filter(a => a.baseUrl || a.base_url);
-
-    return {
-      type: 'dash',
-      video: videoStreams.map(v => ({
-        id: v.id,
-        baseUrl: v.baseUrl || v.base_url,
-        bandwidth: v.bandwidth,
-        width: v.width,
-        height: v.height,
-        codecs: v.codecs,
-        mimeType: v.mimeType || v.mime_type
-      })),
-      audio: audioStreams.map(a => ({
-        id: a.id,
-        baseUrl: a.baseUrl || a.base_url,
-        bandwidth: a.bandwidth,
-        codecs: a.codecs,
-        mimeType: a.mimeType || a.mime_type
-      })),
-      duration: data.dash.duration || 0
-    };
-  }
-
-  if (data.durl && data.durl.length > 0) {
-    return {
-      type: 'mp4',
-      url: data.durl[0].url,
-      size: data.durl[0].size,
-      duration: data.durl[0].length
-    };
-  }
-
-  throw new Error('未找到可用的视频流');
 }
 
 async function getVideoDownloadUrls(bvid) {
