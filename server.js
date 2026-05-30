@@ -15,6 +15,7 @@ try {
 try { execSync('reg add HKCU\\Console /v QuickEdit /t REG_DWORD /d 0 /f', { stdio: 'ignore', timeout: 3000 }); } catch {}
 const { initBrowser, closeBrowser, restartBrowser, getPage, getContext, checkBrowserHealth } = require('./src/browser');
 const { closeApiPage } = require('./src/video-api');
+const { closeBilibiliPage } = require('./src/bilibili-api');
 const { checkLogin } = require('./src/cookie-manager');
 const { loadPlaywright } = require('./src/playwright-loader');
 const ClipboardWatcher = require('./src/clipboard-watcher');
@@ -654,6 +655,7 @@ process.on('SIGINT', async () => {
   stopTmpCleanupTimer();
   stopWatchdog();
   await closeApiPage();
+  await closeBilibiliPage();
   await closeBrowser();
   process.exit(0);
 });

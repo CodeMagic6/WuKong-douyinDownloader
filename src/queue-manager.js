@@ -1,10 +1,12 @@
 const crypto = require('crypto');
 const path = require('path');
 const config = require('../config');
-const { extractAwemeId, resolveShortUrl, isCollectionUrl, getCollectionLabel } = require('./url-utils');
+const { extractAwemeId, resolveShortUrl, isCollectionUrl, getCollectionLabel, isBilibiliUrl, extractBvid } = require('./url-utils');
 const { extractVideoMetadata, getBestVideoUrl } = require('./video-api');
 const { downloadWithRetry } = require('./download-engine');
 const { makeFilename } = require('./filename-utils');
+const { getVideoDownloadUrls } = require('./bilibili-api');
+const { downloadBilibiliVideo } = require('./bilibili-download');
 const { sleep } = require('./helpers');
 const { extractCollectionWithProgress } = require('./collection-extractor');
 
@@ -25,11 +27,15 @@ class QueueManager {
     const existing = this.items.find(i => i.url === url && ['pending', 'extracting', 'downloading'].includes(i.status));
     if (existing) return { id: existing.id, url, status: 'duplicate' };
 
-    const awemeId = extractAwemeId(url);
+    const isBili = isBilibiliUrl(url);
+    const awemeId = isBili ? '' : extractAwemeId(url);
+    const bvid = isBili ? extractBvid(url) : '';
     const item = {
       id: uid(),
       url,
       awemeId: awemeId || '',
+      bvid: bvid || '',
+      isBilibili: isBili,
       status: 'pending',
       progress: 0,
       speedBytesPerSec: 0,
@@ -230,6 +236,79 @@ class QueueManager {
     }
 
     // === Single video handling ===
+    // Bilibili video handling
+    if (item.isBilibili) {
+      item.status = 'extracting';
+      this._broadcastQueue();
+
+      let videoData;
+      try {
+        if (!item.bvid) {
+          throw new Error('无法从 URL 提取 BV 号');
+        }
+        videoData = await getVideoDownloadUrls(item.bvid);
+        item.metadata = videoData.info;
+      } catch (e) {
+        return this._failItem(item, `B站视频解析失败: ${e.message}`);
+      }
+
+      await sleep(config.apiDelayMs);
+
+      item.status = 'downloading';
+      item.startedAt = Date.now();
+      const safeTitle = (videoData.info.title || item.bvid).replace(/[\\/:*?"<>|]/g, '_').substring(0, 80);
+      item.filename = `${videoData.info.author.name}_${safeTitle}_${item.bvid}.mp4`;
+      try {
+        item.filePath = path.join(config.downloadDir, item.filename);
+      } catch {
+        item.filePath = path.join(process.cwd(), 'downloads', item.filename);
+      }
+      this._broadcastQueue();
+
+      try {
+        const result = await downloadBilibiliVideo(
+          videoData.playUrl,
+          item.filePath,
+          (progress) => {
+            item.progress = progress.percent || 0;
+            item.bytesDone = progress.bytesDone;
+            item.bytesTotal = progress.bytesTotal;
+            item.speedBytesPerSec = progress.speed || 0;
+            item.etaSec = progress.eta || 0;
+            this.sse.broadcast('download_progress', {
+              id: item.id,
+              percent: item.progress,
+              speedBytesPerSec: item.speedBytesPerSec,
+              etaSec: item.etaSec,
+              bytesDone: item.bytesDone,
+              bytesTotal: item.bytesTotal,
+              status: 'downloading'
+            });
+          }
+        );
+
+        item.status = 'completed';
+        item.progress = 100;
+        item.bytesTotal = result.bytesTotal;
+        item.completedAt = Date.now();
+        this._broadcastQueue();
+        this.sse.broadcast('download_complete', {
+          id: item.id,
+          awemeId: item.bvid,
+          filename: item.filename,
+          fileSize: result.bytesTotal,
+          author: videoData.info.author.name,
+          description: videoData.info.title,
+          duration: videoData.info.duration,
+          coverUrl: videoData.info.cover
+        });
+      } catch (e) {
+        return this._failItem(item, `B站下载失败: ${e.message}`);
+      }
+      return;
+    }
+
+    // Douyin video handling
     // Step 1: Resolve short URL if needed
     if (!item.awemeId) {
       item.status = 'extracting';
@@ -393,6 +472,7 @@ class QueueManager {
       // Strip bulky metadata from SSE — frontend only needs status/progress
       const light = this.items.map(i => ({
         id: i.id, url: i.url, awemeId: i.awemeId,
+        bvid: i.bvid || '', isBilibili: !!i.isBilibili,
         status: i.status, progress: i.progress,
         speedBytesPerSec: i.speedBytesPerSec, etaSec: i.etaSec,
         bytesDone: i.bytesDone, bytesTotal: i.bytesTotal,
@@ -403,7 +483,10 @@ class QueueManager {
         isCollection: !!i.isCollection,
         collectionLabel: i.collectionLabel,
         collectionFound: i.collectionFound,
-        metadata: i.metadata ? { desc: i.metadata.desc, author: i.metadata.author ? { nickname: i.metadata.author.nickname } : null } : null
+        metadata: i.metadata ? {
+          desc: i.metadata.desc || i.metadata.title,
+          author: i.metadata.author ? { nickname: i.metadata.author.nickname || i.metadata.author.name } : null
+        } : null
       }));
       this.sse.broadcast('queue_update', { items: light });
     } catch (e) {

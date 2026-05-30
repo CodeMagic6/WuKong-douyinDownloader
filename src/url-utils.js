@@ -1,6 +1,24 @@
 const https = require('https');
 const http = require('http');
 
+function isBilibiliUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return /bilibili\.com/i.test(url) || /b23\.tv/i.test(url);
+}
+
+function extractBvid(url) {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+
+  const bvMatch = trimmed.match(/BV[a-zA-Z0-9]+/);
+  if (bvMatch) return bvMatch[0];
+
+  const avMatch = trimmed.match(/av(\d+)/);
+  if (avMatch) return avMatch[1];
+
+  return null;
+}
+
 function extractAwemeId(url) {
   if (!url || typeof url !== 'string') return null;
 
@@ -107,4 +125,4 @@ function resolveShortUrl(url) {
   });
 }
 
-module.exports = { extractAwemeId, isShortUrl, isCollectionUrl, getCollectionType, getCollectionLabel, validateDouyinUrl, normalizeUrl, resolveShortUrl };
+module.exports = { extractAwemeId, isShortUrl, isCollectionUrl, getCollectionType, getCollectionLabel, validateDouyinUrl, normalizeUrl, resolveShortUrl, isBilibiliUrl, extractBvid };

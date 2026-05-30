@@ -407,7 +407,7 @@ function addUrls() {
 
   const urls = raw.split('\n')
     .map(l => l.trim())
-    .filter(l => l.length > 0 && (l.includes('douyin.com') || l.includes('v.douyin.com')));
+    .filter(l => l.length > 0 && (l.includes('douyin.com') || l.includes('v.douyin.com') || l.includes('bilibili.com') || l.includes('b23.tv')));
 
   if (urls.length === 0) {
     alert('请粘贴有效的抖音链接');
