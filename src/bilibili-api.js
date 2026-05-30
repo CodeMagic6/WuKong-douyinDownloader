@@ -233,11 +233,15 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
 
   try {
     // Intercept fav/resource/list API responses
+    let collectionTitle = '';
     page.on('response', function(resp) {
       var rUrl = resp.url();
       if (!rUrl.includes('/x/v3/fav/resource/list')) return;
       resp.json().then(function(body) {
         if (!body || body.code !== 0 || !body.data || !body.data.medias) return;
+        if (body.data.info && body.data.info.title && !collectionTitle) {
+          collectionTitle = body.data.info.title;
+        }
         console.log('[bilibili-collection] API batch:', body.data.medias.length, 'has_more:', body.data.has_more);
         for (var i = 0; i < body.data.medias.length; i++) {
           var m = body.data.medias[i];
@@ -300,8 +304,8 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
       }
     }
 
-    console.log('[bilibili-collection] done:', allVideos.length);
-    return allVideos;
+    console.log('[bilibili-collection] done:', allVideos.length, 'title:', collectionTitle);
+    return { videos: allVideos, title: collectionTitle };
   } finally {
     var isoCtx = page.__isolatedContext;
     await page.close().catch(function() {});

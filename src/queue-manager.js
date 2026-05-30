@@ -220,7 +220,7 @@ class QueueManager {
       this._broadcastQueue();
 
       try {
-        const videoIds = await extractBilibiliCollectionWithProgress(
+        const result = await extractBilibiliCollectionWithProgress(
           item.url,
           (found, attempt) => {
             item.collectionFound = found;
@@ -236,6 +236,9 @@ class QueueManager {
           () => item._cancelled // abort check
         );
 
+        const videoIds = result.videos || result;
+        const collTitle = result.title || label;
+
         if (item._cancelled) return;
         if (videoIds.length === 0) {
           return this._failItem(item, '未从B站合集中找到任何视频');
@@ -246,8 +249,8 @@ class QueueManager {
         if (idx !== -1) this.items.splice(idx, 1);
 
         // Create collection folder
-        const safeLabel = label.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
-        const collectionFolder = path.join(config.downloadDir, safeLabel);
+        const safeTitle = collTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+        const collectionFolder = path.join(config.downloadDir, safeTitle);
         try {
           if (!fs.existsSync(collectionFolder)) {
             fs.mkdirSync(collectionFolder, { recursive: true });
@@ -266,7 +269,7 @@ class QueueManager {
 
         this.sse.broadcast('collection_complete', {
           id: item.id,
-          label,
+          label: collTitle,
           total: videoIds.length,
           added: added.length
         });
