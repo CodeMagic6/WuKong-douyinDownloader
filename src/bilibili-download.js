@@ -84,11 +84,27 @@ function downloadFileNative(url, destPath, onProgress) {
 async function downloadBilibiliVideo(playUrlData, destPath, onProgress) {
   const tmp = tmpPath(destPath);
 
+  const doDownload = async (url) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+        const result = await downloadFileNative(url, tmp, onProgress);
+        try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+        fs.renameSync(tmp, destPath);
+        return { bytesTotal: result.bytesTotal, filePath: destPath };
+      } catch (e) {
+        console.log('[bilibili-download] attempt', attempt + 1, 'failed:', e.message);
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+  };
+
   if (playUrlData.type === 'mp4') {
-    const result = await downloadFileNative(playUrlData.url, tmp, onProgress);
-    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
-    fs.renameSync(tmp, destPath);
-    return { bytesTotal: result.bytesTotal, filePath: destPath };
+    return await doDownload(playUrlData.url);
   }
 
   if (playUrlData.type === 'dash') {
@@ -104,10 +120,7 @@ async function downloadBilibiliVideo(playUrlData, destPath, onProgress) {
       onProgress({ percent: 0, bytesDone: 0, bytesTotal: 0, speed: 0, eta: 0 });
     }
 
-    const result = await downloadFileNative(videoUrl, tmp, onProgress);
-    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
-    fs.renameSync(tmp, destPath);
-    return { bytesTotal: result.bytesTotal, filePath: destPath };
+    return await doDownload(videoUrl);
   }
 
   throw new Error('未知的播放地址格式');
