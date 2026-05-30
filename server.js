@@ -279,6 +279,102 @@ app.post('/api/login/cancel', (req, res) => {
   }
   res.json({ status: 'cancelled' });
 });
+
+// ---------- B站 Login flow ----------
+let bilibiliLoginInProgress = false;
+
+async function startBilibiliLoginFlow() {
+  if (bilibiliLoginInProgress) return;
+  bilibiliLoginInProgress = true;
+
+  let loginBrowser = null;
+  let loginContext = null;
+  let loginPage = null;
+
+  try {
+    sse.broadcast('bilibili_login_progress', { status: 'starting' });
+
+    const playwright = loadPlaywright();
+    const { chromium } = playwright;
+
+    loginBrowser = await chromium.launch({
+      headless: false,
+      args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
+    });
+
+    loginContext = await loginBrowser.newContext({
+      viewport: { width: 1440, height: 900 },
+      userAgent: config.userAgent,
+      locale: 'zh-CN'
+    });
+
+    loginPage = await loginContext.newPage();
+
+    sse.broadcast('bilibili_login_progress', { status: 'waiting' });
+
+    await loginPage.goto('https://passport.bilibili.com/login', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    }).catch(() => {});
+
+    // Poll for SESSDATA cookie (3 min timeout)
+    const pollInterval = 1000;
+    const maxAttempts = 180;
+    let loggedIn = false;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, pollInterval));
+      try {
+        const cookies = await loginContext.cookies();
+        const hasSession = cookies.some(c => c.name === 'SESSDATA');
+        if (hasSession) {
+          loggedIn = true;
+          break;
+        }
+      } catch {}
+    }
+
+    if (loggedIn) {
+      // Save bilibili cookies to file
+      const cookies = await loginContext.cookies();
+      const fs = require('fs');
+      fs.writeFileSync(config.bilibiliCookieFile, JSON.stringify(cookies, null, 2), 'utf-8');
+
+      // Update bilibili-api page with new cookies
+      try {
+        const { closeBilibiliPage } = require('./src/bilibili-api');
+        await closeBilibiliPage();
+      } catch {}
+
+      sse.broadcast('bilibili_login_progress', { status: 'success' });
+      sse.broadcast('status_update', { bilibiliCookieValid: true });
+      console.log('B站扫码登录成功');
+    } else {
+      sse.broadcast('bilibili_login_progress', { status: 'timeout' });
+      console.log('B站扫码登录超时');
+    }
+  } catch (e) {
+    console.error('B站扫码登录失败:', e.message);
+    sse.broadcast('bilibili_login_progress', { status: 'error', error: e.message });
+  } finally {
+    if (loginPage) await loginPage.close().catch(() => {});
+    if (loginBrowser) await loginBrowser.close().catch(() => {});
+    bilibiliLoginInProgress = false;
+  }
+}
+
+app.post('/api/bilibili/login', (req, res) => {
+  if (bilibiliLoginInProgress) return res.json({ status: 'in_progress' });
+  startBilibiliLoginFlow();
+  res.json({ status: 'started' });
+});
+
+app.post('/api/bilibili/login/cancel', (req, res) => {
+  if (bilibiliLoginInProgress) {
+    bilibiliLoginInProgress = false;
+  }
+  res.json({ status: 'cancelled' });
+});
 // ---------- End login flow ----------
 
 // Ping (health check)
@@ -293,10 +389,17 @@ app.get('/api/status', (req, res) => {
   } catch {
     cookieValid = false;
   }
+  let bilibiliCookieValid = false;
+  try {
+    const raw = fs.readFileSync(config.bilibiliCookieFile, 'utf-8');
+    const cookies = JSON.parse(raw);
+    bilibiliCookieValid = cookies.some(c => c.name === 'SESSDATA');
+  } catch {}
   const stats = queue.getStats();
   res.json({
     browserReady,
     cookieValid,
+    bilibiliCookieValid,
     queueRunning: stats.queueRunning,
     queueLength: stats.queueLength,
     downloadsToday: stats.downloadsToday,

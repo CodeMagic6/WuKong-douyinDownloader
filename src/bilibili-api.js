@@ -1,5 +1,10 @@
 const { getContext } = require('./browser');
 const { sleep } = require('./helpers');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const bilibiliCookieFile = path.join(os.homedir(), '.claude', 'bilibili_cookies.json');
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -56,6 +61,15 @@ async function getBilibiliPage() {
 
   const ctx = await getContext();
   if (!ctx) throw new Error('Browser context not available');
+
+  // Load bilibili cookies
+  try {
+    const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+    const cookies = JSON.parse(raw);
+    if (cookies.length > 0) {
+      await ctx.addCookies(cookies);
+    }
+  } catch {}
 
   bilibiliPage = await ctx.newPage();
   await bilibiliPage.goto('https://www.bilibili.com/', {
@@ -185,11 +199,123 @@ async function closeBilibiliPage() {
   }
 }
 
+function isBilibiliCollectionUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return /space\.bilibili\.com\/\d+\/favlist/i.test(url);
+}
+
+function parseBilibiliCollectionUrl(url) {
+  const fidMatch = url.match(/fid=(\d+)/);
+  const midMatch = url.match(/space\.bilibili\.com\/(\d+)/);
+  return {
+    fid: fidMatch ? fidMatch[1] : null,
+    mid: midMatch ? midMatch[1] : null
+  };
+}
+
+async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelled) {
+  const { fid } = parseBilibiliCollectionUrl(url);
+  if (!fid) throw new Error('无法从 URL 提取收藏夹 ID');
+
+  const { getIsolatedPage } = require('./browser');
+  const ctx = await getContext();
+  // Load bilibili cookies
+  try {
+    const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+    const cookies = JSON.parse(raw);
+    if (cookies.length > 0 && ctx) {
+      await ctx.addCookies(cookies);
+    }
+  } catch {}
+
+  const page = await getIsolatedPage();
+  const allVideos = [];
+
+  try {
+    // Intercept fav/resource/list API responses
+    page.on('response', function(resp) {
+      var rUrl = resp.url();
+      if (!rUrl.includes('/x/v3/fav/resource/list')) return;
+      resp.json().then(function(body) {
+        if (!body || body.code !== 0 || !body.data || !body.data.medias) return;
+        console.log('[bilibili-collection] API batch:', body.data.medias.length, 'has_more:', body.data.has_more);
+        for (var i = 0; i < body.data.medias.length; i++) {
+          var m = body.data.medias[i];
+          if (m.bvid && m.type === 2) {
+            var found = false;
+            for (var j = 0; j < allVideos.length; j++) {
+              if (allVideos[j].bvid === m.bvid) { found = true; break; }
+            }
+            if (!found) {
+              allVideos.push({
+                bvid: m.bvid,
+                title: (m.title || '').substring(0, 100),
+                author: m.upper?.name || ''
+              });
+            }
+          }
+        }
+      }).catch(function() {});
+    });
+
+    // Navigate to collection page — this triggers API calls
+    await page.goto(url, { timeout: 30000, waitUntil: 'domcontentloaded' }).catch(function(e) {
+      console.log('[bilibili-collection] goto failed:', e.message);
+    });
+    if (isCancelled && isCancelled()) return [];
+
+    // Wait for first API batch
+    for (var w = 0; w < 30; w++) {
+      if (allVideos.length > 0) break;
+      if (isCancelled && isCancelled()) return [];
+      await sleep(500);
+    }
+
+    if (allVideos.length === 0) {
+      console.log('[bilibili-collection] no data from initial load, page url:', page.url());
+      return [];
+    }
+
+    if (onProgress) onProgress(allVideos.length, 1);
+
+    // Scroll to trigger "load more" which fires additional API calls
+    var prev = allVideos.length;
+    var stale = 0;
+    for (var s = 0; s < 50; s++) {
+      if (isCancelled && isCancelled()) break;
+
+      await page.evaluate(function() {
+        window.scrollTo(0, document.body.scrollHeight);
+      }).catch(function() {});
+      await sleep(2000);
+
+      if (allVideos.length > prev) {
+        console.log('[bilibili-collection] scroll', s, 'videos:', allVideos.length);
+        if (onProgress) onProgress(allVideos.length, s + 2);
+        prev = allVideos.length;
+        stale = 0;
+      } else {
+        stale++;
+        if (stale >= 5) break;
+      }
+    }
+
+    console.log('[bilibili-collection] done:', allVideos.length);
+    return allVideos;
+  } finally {
+    var isoCtx = page.__isolatedContext;
+    await page.close().catch(function() {});
+    if (isoCtx) await isoCtx.close().catch(function() {});
+  }
+}
+
 module.exports = {
   extractBvid,
   isBilibiliUrl,
   fetchVideoInfo,
   fetchPlayUrl,
   getVideoDownloadUrls,
-  closeBilibiliPage
+  closeBilibiliPage,
+  isBilibiliCollectionUrl,
+  extractBilibiliCollectionWithProgress
 };

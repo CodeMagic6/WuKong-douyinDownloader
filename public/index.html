@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WuKong抖音下载</title>
+<title>WuKong视频下载</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -11,9 +11,10 @@
   <!-- Status Bar -->
   <header id="status-bar">
     <div class="status-left">
-      <span class="logo">WuKong抖音下载</span>
+      <span class="logo">WuKong视频下载</span>
       <span class="status-item" id="status-browser">浏览器: --</span>
-      <span class="status-item" id="status-cookie">登录: --</span>
+      <span class="status-item" id="status-cookie">抖音: --</span>
+      <span class="status-item" id="status-bilibili-cookie">B站: --</span>
       <span class="status-item" id="status-queue">队列: 0</span>
     </div>
     <div class="status-right">
@@ -22,7 +23,7 @@
     </div>
   </header>
 
-  <!-- Login Modal -->
+  <!-- Login Modal (抖音) -->
   <div id="login-modal" class="modal-overlay hidden">
     <div class="modal-card">
       <div class="modal-header">
@@ -42,10 +43,30 @@
     </div>
   </div>
 
+  <!-- B站 Login Modal -->
+  <div id="bilibili-login-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>扫码登录B站</h3>
+      </div>
+      <div class="modal-body">
+        <div class="modal-loading" id="bilibili-login-loading">
+          <div class="spinner"></div>
+        </div>
+        <p id="bilibili-login-status-text">正在打开浏览器窗口...</p>
+        <p class="modal-hint">请在自动打开的浏览器窗口中<br>使用B站App扫码登录</p>
+        <p class="modal-tip">如果浏览器未自动打开，请手动访问 <strong>https://passport.bilibili.com/login</strong></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-sm" id="btn-bilibili-login-cancel" onclick="closeBilibiliLoginModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
   <!-- URL Input Area -->
   <section id="input-area">
     <div class="input-row">
-      <textarea id="url-input" placeholder="粘贴抖音视频链接，每行一个&#10;支持格式:&#10;https://www.douyin.com/video/xxx&#10;https://www.douyin.com/user/self?modal_id=xxx&#10;https://v.douyin.com/xxx/" rows="3"></textarea>
+      <textarea id="url-input" placeholder="粘贴视频链接，每行一个&#10;支持抖音:&#10;  https://www.douyin.com/video/xxx&#10;  https://v.douyin.com/xxx/&#10;支持B站:&#10;  https://www.bilibili.com/video/BVxxx&#10;  https://space.bilibili.com/xxx/favlist?fid=xxx&#10;  https://b23.tv/xxx" rows="4"></textarea>
       <button id="btn-add" onclick="addUrls()">添加下载</button>
     </div>
   </section>
@@ -139,6 +160,10 @@
         <div class="setting-item">
           <label>&nbsp;</label>
           <button class="btn-sm" onclick="restartBrowser()">重启浏览器</button>
+        </div>
+        <div class="setting-item">
+          <label>B站登录</label>
+          <button class="btn-sm" onclick="startBilibiliLogin()">扫码登录B站</button>
         </div>
       </div>
       <div class="setting-actions">

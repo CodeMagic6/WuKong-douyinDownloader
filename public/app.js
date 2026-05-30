@@ -164,6 +164,11 @@ function connectSSE() {
     handleLoginProgress(data);
   });
 
+  _es.addEventListener('bilibili_login_progress', (e) => {
+    const data = JSON.parse(e.data);
+    handleBilibiliLoginProgress(data);
+  });
+
   _es.addEventListener('settings_updated', (e) => {
     const data = JSON.parse(e.data);
     Object.assign(settings, data);
@@ -201,6 +206,7 @@ function connectSSE() {
 function updateStatusBar() {
   const browser = $('#status-browser');
   const cookie = $('#status-cookie');
+  const bilibiliCookie = $('#status-bilibili-cookie');
   const queue = $('#status-queue');
   const today = $('#status-today');
 
@@ -208,9 +214,13 @@ function updateStatusBar() {
     ? '<span class="badge badge-ok">已就绪</span>'
     : '<span class="badge badge-fail">未连接</span>'}`;
 
-  cookie.innerHTML = `登录: ${statusInfo.cookieValid
+  cookie.innerHTML = `抖音: ${statusInfo.cookieValid
     ? '<span class="badge badge-ok">已登录</span>'
-    : '<span class="badge badge-warn">未登录 → 扫码登录</span>'}`;
+    : '<span class="badge badge-warn" style="cursor:pointer" onclick="startLogin()">未登录</span>'}`;
+
+  bilibiliCookie.innerHTML = `B站: ${statusInfo.bilibiliCookieValid
+    ? '<span class="badge badge-ok">已登录</span>'
+    : '<span class="badge badge-warn" style="cursor:pointer" onclick="startBilibiliLogin()">未登录</span>'}`;
 
   queue.textContent = `队列: ${statusInfo.queueLength || 0}`;
   today.textContent = `今日: ${statusInfo.downloadsToday || 0}`;
@@ -407,7 +417,7 @@ function addUrls() {
 
   const urls = raw.split('\n')
     .map(l => l.trim())
-    .filter(l => l.length > 0 && (l.includes('douyin.com') || l.includes('v.douyin.com') || l.includes('bilibili.com') || l.includes('b23.tv')));
+    .filter(l => l.length > 0 && (l.includes('douyin.com') || l.includes('v.douyin.com') || l.includes('bilibili.com') || l.includes('b23.tv') || l.includes('space.bilibili.com')));
 
   if (urls.length === 0) {
     alert('请粘贴有效的抖音链接');
@@ -772,6 +782,93 @@ function closeLoginModal() {
   if (modal) modal.classList.add('hidden');
   loginModalOpen = false;
   fetch('/api/login/cancel', { method: 'POST' }).catch(() => {});
+}
+
+// ---------- B站 Login ----------
+let bilibiliLoginModalOpen = false;
+
+function startBilibiliLogin() {
+  if (bilibiliLoginModalOpen) return;
+  bilibiliLoginModalOpen = true;
+
+  const modal = $('#bilibili-login-modal');
+  const statusText = $('#bilibili-login-status-text');
+  const loading = $('#bilibili-login-loading');
+  const cancelBtn = $('#btn-bilibili-login-cancel');
+
+  if (!modal) return;
+
+  // Reset modal state
+  modal.classList.remove('hidden');
+  if (loading) loading.innerHTML = '<div class="spinner"></div>';
+  if (statusText) statusText.textContent = '正在打开浏览器窗口...';
+  if (statusText) statusText.style.color = '#c9d1d9';
+  if (cancelBtn) cancelBtn.textContent = '取消';
+
+  fetch('/api/bilibili/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.status === 'in_progress') {
+      if (statusText) statusText.textContent = '登录窗口已打开，请在浏览器中扫码...';
+    }
+  })
+  .catch(e => {
+    if (statusText) statusText.textContent = '启动登录失败: ' + e.message;
+    if (loading) loading.innerHTML = '<div class="login-success-icon" style="color:#f85149">✕</div>';
+  });
+}
+
+function handleBilibiliLoginProgress(data) {
+  const statusText = $('#bilibili-login-status-text');
+  const loading = $('#bilibili-login-loading');
+  const cancelBtn = $('#btn-bilibili-login-cancel');
+
+  if (!statusText) return;
+
+  switch (data.status) {
+    case 'starting':
+      statusText.textContent = '正在打开浏览器窗口...';
+      break;
+    case 'waiting':
+      statusText.textContent = '请在打开的浏览器窗口中扫码登录B站';
+      if (cancelBtn) cancelBtn.textContent = '关闭';
+      break;
+    case 'success':
+      if (loading) loading.innerHTML = '<div class="login-success-icon">✓</div>';
+      statusText.textContent = 'B站登录成功！';
+      statusText.style.color = '#3fb950';
+      if (cancelBtn) cancelBtn.textContent = '完成';
+      // Update status bar immediately
+      statusInfo.bilibiliCookieValid = true;
+      updateStatusBar();
+      // Close modal after 2s
+      setTimeout(() => closeBilibiliLoginModal(), 2000);
+      break;
+    case 'timeout':
+      if (loading) loading.innerHTML = '<div class="login-success-icon" style="color:#d29922">⏱</div>';
+      statusText.textContent = '扫码超时 (3分钟)，请重试';
+      statusText.style.color = '#d29922';
+      if (cancelBtn) cancelBtn.textContent = '关闭';
+      fetch('/api/bilibili/login/cancel', { method: 'POST' }).catch(() => {});
+      break;
+    case 'error':
+      if (loading) loading.innerHTML = '<div class="login-success-icon" style="color:#f85149">✕</div>';
+      statusText.textContent = '登录失败: ' + (data.error || '未知错误');
+      statusText.style.color = '#f85149';
+      if (cancelBtn) cancelBtn.textContent = '关闭';
+      fetch('/api/bilibili/login/cancel', { method: 'POST' }).catch(() => {});
+      break;
+  }
+}
+
+function closeBilibiliLoginModal() {
+  const modal = $('#bilibili-login-modal');
+  if (modal) modal.classList.add('hidden');
+  bilibiliLoginModalOpen = false;
+  fetch('/api/bilibili/login/cancel', { method: 'POST' }).catch(() => {});
 }
 
 function setupEnterKey() {

@@ -16,6 +16,7 @@ module.exports = {
   clipboardCapture: false,
   autoDownload: false,
   cookieFile: path.join(os.homedir(), '.claude', 'douyin_cookies.json'),
+  bilibiliCookieFile: path.join(os.homedir(), '.claude', 'bilibili_cookies.json'),
   maxConcurrent: 3,
   maxRetries: 3,
   retryDelayMs: 2000,

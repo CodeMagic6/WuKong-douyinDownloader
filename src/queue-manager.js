@@ -1,11 +1,12 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const { extractAwemeId, resolveShortUrl, isCollectionUrl, getCollectionLabel, isBilibiliUrl, extractBvid } = require('./url-utils');
 const { extractVideoMetadata, getBestVideoUrl } = require('./video-api');
 const { downloadWithRetry } = require('./download-engine');
 const { makeFilename } = require('./filename-utils');
-const { getVideoDownloadUrls } = require('./bilibili-api');
+const { getVideoDownloadUrls, isBilibiliCollectionUrl, extractBilibiliCollectionWithProgress } = require('./bilibili-api');
 const { downloadBilibiliVideo } = require('./bilibili-download');
 const { sleep } = require('./helpers');
 const { extractCollectionWithProgress } = require('./collection-extractor');
@@ -23,7 +24,7 @@ class QueueManager {
     this.processing = false;
   }
 
-  _addSingleItem(url) {
+  _addSingleItem(url, collectionFolder) {
     const existing = this.items.find(i => i.url === url && ['pending', 'extracting', 'downloading'].includes(i.status));
     if (existing) return { id: existing.id, url, status: 'duplicate' };
 
@@ -50,7 +51,8 @@ class QueueManager {
       completedAt: null,
       retryCount: 0,
       metadata: null,
-      isCollection: false
+      isCollection: false,
+      collectionFolder: collectionFolder || ''
     };
     this.items.push(item);
     return { id: item.id, url, status: 'pending' };
@@ -86,6 +88,35 @@ class QueueManager {
         };
         this.items.push(placeholder);
         results.push({ id: placeholder.id, url, status: 'pending', isCollection: true, label });
+      } else if (isBilibiliCollectionUrl(url)) {
+        // Bilibili collection
+        const placeholder = {
+          id: uid(),
+          url,
+          awemeId: '',
+          bvid: '',
+          isBilibili: true,
+          status: 'pending',
+          progress: 0,
+          speedBytesPerSec: 0,
+          etaSec: 0,
+          bytesDone: 0,
+          bytesTotal: 0,
+          filename: '',
+          filePath: '',
+          error: '',
+          createdAt: Date.now(),
+          startedAt: null,
+          completedAt: null,
+          retryCount: 0,
+          metadata: null,
+          isCollection: true,
+          isBilibiliCollection: true,
+          collectionLabel: 'B站合集',
+          collectionFound: 0
+        };
+        this.items.push(placeholder);
+        results.push({ id: placeholder.id, url, status: 'pending', isCollection: true, label: 'B站合集' });
       } else {
         results.push(this._addSingleItem(url));
       }
@@ -182,7 +213,71 @@ class QueueManager {
   }
 
   async _processItem(item) {
-    // === Collection handling ===
+    // === Bilibili Collection handling ===
+    if (item.isBilibiliCollection) {
+      const label = item.collectionLabel || 'B站合集';
+      item.status = 'extracting';
+      this._broadcastQueue();
+
+      try {
+        const videoIds = await extractBilibiliCollectionWithProgress(
+          item.url,
+          (found, attempt) => {
+            item.collectionFound = found;
+            item.progress = Math.min(95, (attempt / 40) * 100);
+            this.sse.broadcast('collection_progress', {
+              id: item.id,
+              label,
+              found,
+              attempt
+            });
+            this._broadcastQueue();
+          },
+          () => item._cancelled // abort check
+        );
+
+        if (item._cancelled) return;
+        if (videoIds.length === 0) {
+          return this._failItem(item, '未从B站合集中找到任何视频');
+        }
+
+        // Remove placeholder item
+        const idx = this.items.indexOf(item);
+        if (idx !== -1) this.items.splice(idx, 1);
+
+        // Create collection folder
+        const safeLabel = label.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+        const collectionFolder = path.join(config.downloadDir, safeLabel);
+        try {
+          if (!fs.existsSync(collectionFolder)) {
+            fs.mkdirSync(collectionFolder, { recursive: true });
+          }
+        } catch (e) {
+          console.error('[queue] 创建B站合集文件夹失败:', e.message);
+        }
+
+        // Add individual video items
+        const added = [];
+        for (const vid of videoIds) {
+          const videoUrl = `https://www.bilibili.com/video/${vid.bvid}`;
+          const r = this._addSingleItem(videoUrl, collectionFolder);
+          added.push(r);
+        }
+
+        this.sse.broadcast('collection_complete', {
+          id: item.id,
+          label,
+          total: videoIds.length,
+          added: added.length
+        });
+        this._broadcastQueue();
+      } catch (e) {
+        return this._failItem(item, `B站合集解析失败: ${e.message}`);
+      }
+      return;
+    }
+
+    // === Douyin Collection handling ===
     if (item.isCollection) {
       const label = item.collectionLabel || '合集';
       item.status = 'extracting';
@@ -214,11 +309,22 @@ class QueueManager {
         const idx = this.items.indexOf(item);
         if (idx !== -1) this.items.splice(idx, 1);
 
+        // Create collection folder
+        const safeLabel = label.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+        const collectionFolder = path.join(config.downloadDir, safeLabel);
+        try {
+          if (!fs.existsSync(collectionFolder)) {
+            fs.mkdirSync(collectionFolder, { recursive: true });
+          }
+        } catch (e) {
+          console.error('[queue] 创建合集文件夹失败:', e.message);
+        }
+
         // Add individual video items
         const added = [];
         for (const vid of videoIds) {
           const videoUrl = `https://www.douyin.com/video/${vid}`;
-          const r = this._addSingleItem(videoUrl);
+          const r = this._addSingleItem(videoUrl, collectionFolder);
           added.push(r);
         }
 
@@ -259,7 +365,16 @@ class QueueManager {
       const safeTitle = (videoData.info.title || item.bvid).replace(/[\\/:*?"<>|]/g, '_').substring(0, 80);
       item.filename = `${videoData.info.author.name}_${safeTitle}_${item.bvid}.mp4`;
       try {
-        item.filePath = path.join(config.downloadDir, item.filename);
+        // If video has multiple pages, create subfolder
+        let downloadDir = config.downloadDir;
+        if (videoData.info.pages && videoData.info.pages.length > 1) {
+          const videoFolder = path.join(config.downloadDir, safeTitle);
+          if (!fs.existsSync(videoFolder)) {
+            fs.mkdirSync(videoFolder, { recursive: true });
+          }
+          downloadDir = videoFolder;
+        }
+        item.filePath = path.join(downloadDir, item.filename);
       } catch {
         item.filePath = path.join(process.cwd(), 'downloads', item.filename);
       }
@@ -351,7 +466,8 @@ class QueueManager {
     item.startedAt = Date.now();
     item.filename = makeFilename(videoInfo.author.nickname, videoInfo.desc, item.awemeId);
     try {
-      item.filePath = path.join(config.downloadDir, item.filename);
+      const downloadDir = item.collectionFolder || config.downloadDir;
+      item.filePath = path.join(downloadDir, item.filename);
     } catch {
       item.filePath = path.join(process.cwd(), 'downloads', item.filename);
     }
@@ -481,8 +597,10 @@ class QueueManager {
         startedAt: i.startedAt, completedAt: i.completedAt,
         retryCount: i.retryCount,
         isCollection: !!i.isCollection,
+        isBilibiliCollection: !!i.isBilibiliCollection,
         collectionLabel: i.collectionLabel,
         collectionFound: i.collectionFound,
+        collectionFolder: i.collectionFolder || '',
         metadata: i.metadata ? {
           desc: i.metadata.desc || i.metadata.title,
           author: i.metadata.author ? { nickname: i.metadata.author.nickname || i.metadata.author.name } : null
