@@ -272,7 +272,7 @@ function renderItem(item) {
   const author = item.metadata?.author?.nickname || '';
   const desc = isCollection
     ? `📋 ${item.collectionLabel || '合集'}: ${item.collectionFound || 0} 个视频`
-    : (item.metadata?.desc || item.url);
+    : (item.metadata?.desc || item.metadata?.title || item.url);
   const trimmedDesc = desc.length > 80 ? desc.substring(0, 80) + '...' : desc;
 
   const isComplete = item.status === 'completed';
