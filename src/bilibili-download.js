@@ -27,32 +27,37 @@ function tmpPath(dest) { return dest + '.tmp'; }
 
 function downloadFileNative(url, destPath, onProgress) {
   return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
     const reqHeaders = { ...BILIBILI_HEADERS, 'Cookie': getBilibiliCookieHeader() };
 
-    const doRequest = (reqUrl, redirectCount) => {
+    const doRequest = (reqUrl, redirectCount, startByte) => {
       if (redirectCount > 5) return reject(new Error('重定向次数过多'));
 
+      const headers = { ...reqHeaders };
+      if (startByte > 0) headers['Range'] = 'bytes=' + startByte + '-';
+
       const c = reqUrl.startsWith('https') ? https : http;
-      c.get(reqUrl, { headers: reqHeaders, timeout: 30000 }, (res) => {
+      c.get(reqUrl, { headers, timeout: 30000 }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
-          doRequest(res.headers.location, redirectCount + 1);
+          doRequest(res.headers.location, redirectCount + 1, startByte);
           return;
         }
-        if (res.statusCode !== 200) {
+        if (res.statusCode !== 200 && res.statusCode !== 206) {
           res.resume();
           reject(new Error('HTTP ' + res.statusCode));
           return;
         }
 
         const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
-        let downloaded = 0;
+        const contentTotal = res.headers['content-range']
+          ? parseInt(res.headers['content-range'].split('/')[1], 10)
+          : total;
+        let downloaded = startByte;
         let lastTime = Date.now();
-        let lastBytes = 0;
+        let lastBytes = downloaded;
         let lastLogTime = 0;
 
-        const fileStream = fs.createWriteStream(destPath);
+        const fileStream = fs.createWriteStream(destPath, { flags: startByte > 0 ? 'a' : 'w' });
 
         res.on('data', (chunk) => {
           downloaded += chunk.length;
@@ -63,15 +68,14 @@ function downloadFileNative(url, destPath, onProgress) {
             const timeDiff = (now - lastTime) / 1000;
             if (timeDiff >= 1) {
               const speed = (downloaded - lastBytes) / timeDiff;
-              const percent = total ? (downloaded / total * 100) : 0;
-              const eta = speed > 0 ? (total - downloaded) / speed : 0;
-              onProgress({ percent, bytesDone: downloaded, bytesTotal: total, speed, eta });
+              const percent = contentTotal ? (downloaded / contentTotal * 100) : 0;
+              const eta = speed > 0 ? (contentTotal - downloaded) / speed : 0;
+              onProgress({ percent, bytesDone: downloaded, bytesTotal: contentTotal, speed, eta });
               lastTime = now;
               lastBytes = downloaded;
             }
-            // Log every 30 seconds
             if (now - lastLogTime > 30000) {
-              console.log('[bilibili-download]', (downloaded / 1024 / 1024).toFixed(1) + 'MB / ' + (total / 1024 / 1024).toFixed(1) + 'MB');
+              console.log('[bilibili-download]', (downloaded / 1024 / 1024).toFixed(1) + 'MB / ' + (contentTotal / 1024 / 1024).toFixed(1) + 'MB');
               lastLogTime = now;
             }
           }
@@ -79,17 +83,28 @@ function downloadFileNative(url, destPath, onProgress) {
 
         res.on('end', () => {
           fileStream.end();
+          if (downloaded < contentTotal) {
+            console.log('[bilibili-download] incomplete, resume from', downloaded);
+            doRequest(reqUrl, 0, downloaded);
+            return;
+          }
           console.log('[bilibili-download] done:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
           if (onProgress) {
-            onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: total || downloaded, speed: 0, eta: 0 });
+            onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: contentTotal, speed: 0, eta: 0 });
           }
-          resolve({ bytesTotal: total || downloaded });
+          resolve({ bytesTotal: contentTotal });
         });
 
         res.on('error', (e) => {
-          console.error('[bilibili-download] stream error:', e.message, 'downloaded:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
+          console.error('[bilibili-download] stream error:', e.message, 'at:', (downloaded / 1024 / 1024).toFixed(1) + 'MB');
           fileStream.end();
-          reject(e);
+          // Resume from where we left off
+          if (downloaded > 0 && downloaded < contentTotal) {
+            console.log('[bilibili-download] resuming from', downloaded);
+            doRequest(reqUrl, 0, downloaded);
+          } else {
+            reject(e);
+          }
         });
       }).on('error', (e) => {
         console.error('[bilibili-download] request error:', e.message);
@@ -101,7 +116,7 @@ function downloadFileNative(url, destPath, onProgress) {
       });
     };
 
-    doRequest(url, 0);
+    doRequest(url, 0, 0);
   });
 }
 
