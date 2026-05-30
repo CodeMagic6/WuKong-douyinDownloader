@@ -18,7 +18,7 @@ async function downloadViaBrowserFetch(context, url, destPath, onProgress) {
     const resp = await context.request.fetch(url, {
       method: 'GET',
       headers: BILIBILI_HEADERS,
-      timeout: 600000,
+      timeout: 0,
       failOnStatusCode: false
     });
 
