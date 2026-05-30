@@ -11,6 +11,9 @@ try {
   const ps = 'Add-Type -MemberDefinition \'[DllImport("kernel32.dll")]public static extern bool SetConsoleMode(IntPtr h,uint m);[DllImport("kernel32.dll")]public static extern IntPtr GetStdHandle(int n);\' -Name C -Namespace API; [API.C]::SetConsoleMode([API.C]::GetStdHandle(-10),0x0080)';
   execSync(`powershell -NoProfile -EncodedCommand ${Buffer.from(ps, 'utf16le').toString('base64')}`, { stdio: 'ignore', timeout: 10000 });
 } catch {}
+// Suppress Playwright debug logs
+process.env.DEBUG = '';
+process.env.PWDEBUG = '';
 // Registry fallback for future console sessions
 try { execSync('reg add HKCU\\Console /v QuickEdit /t REG_DWORD /d 0 /f', { stdio: 'ignore', timeout: 3000 }); } catch {}
 const { initBrowser, closeBrowser, restartBrowser, getPage, getContext, checkBrowserHealth } = require('./src/browser');
