@@ -1,5 +1,6 @@
 const fs = require('fs');
-const path = require('path');
+const https = require('https');
+const http = require('http');
 const { getContext } = require('./browser');
 
 const BILIBILI_HEADERS = {
@@ -12,46 +13,82 @@ const BILIBILI_HEADERS = {
 
 function tmpPath(dest) { return dest + '.tmp'; }
 
-async function downloadViaBrowserFetch(context, url, destPath, onProgress) {
-  const tmp = tmpPath(destPath);
-  try {
-    const resp = await context.request.fetch(url, {
-      method: 'GET',
-      headers: BILIBILI_HEADERS,
-      timeout: 0,
-      failOnStatusCode: false
-    });
+function downloadFileNative(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const reqHeaders = { ...BILIBILI_HEADERS };
 
-    if (!resp.ok()) throw new Error('HTTP ' + resp.status());
+    const doRequest = (reqUrl, redirectCount) => {
+      if (redirectCount > 5) return reject(new Error('重定向次数过多'));
 
-    const total = parseInt(resp.headers()['content-length'] || '0', 10) || 0;
-    const buffer = await resp.body();
+      const c = reqUrl.startsWith('https') ? https : http;
+      c.get(reqUrl, { headers: reqHeaders, timeout: 30000 }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          doRequest(res.headers.location, redirectCount + 1);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error('HTTP ' + res.statusCode));
+          return;
+        }
 
-    if (!buffer || buffer.length === 0) throw new Error('empty data');
+        const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
+        let downloaded = 0;
+        let lastTime = Date.now();
+        let lastBytes = 0;
 
-    if (onProgress) onProgress({ percent: 0, bytesDone: 0, bytesTotal: total || buffer.length, speed: 0, eta: 0 });
+        const fileStream = fs.createWriteStream(destPath);
 
-    fs.writeFileSync(tmp, buffer);
+        res.on('data', (chunk) => {
+          downloaded += chunk.length;
+          fileStream.write(chunk);
 
-    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
-    fs.renameSync(tmp, destPath);
+          if (onProgress) {
+            const now = Date.now();
+            const timeDiff = (now - lastTime) / 1000;
+            if (timeDiff >= 1) {
+              const speed = (downloaded - lastBytes) / timeDiff;
+              const percent = total ? (downloaded / total * 100) : 0;
+              const eta = speed > 0 ? (total - downloaded) / speed : 0;
+              onProgress({ percent, bytesDone: downloaded, bytesTotal: total, speed, eta });
+              lastTime = now;
+              lastBytes = downloaded;
+            }
+          }
+        });
 
-    const size = fs.statSync(destPath).size;
-    if (onProgress) onProgress({ percent: 100, bytesDone: size, bytesTotal: size, speed: 0, eta: 0 });
+        res.on('end', () => {
+          fileStream.end();
+          if (onProgress) {
+            onProgress({ percent: 100, bytesDone: downloaded, bytesTotal: total || downloaded, speed: 0, eta: 0 });
+          }
+          resolve({ bytesTotal: total || downloaded });
+        });
 
-    return { bytesTotal: size, filePath: destPath };
-  } catch (e) {
-    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
-    throw e;
-  }
+        res.on('error', (e) => {
+          fileStream.end();
+          reject(e);
+        });
+      }).on('error', reject).on('timeout', function() {
+        this.destroy();
+        reject(new Error('连接超时'));
+      });
+    };
+
+    doRequest(url, 0);
+  });
 }
 
 async function downloadBilibiliVideo(playUrlData, destPath, onProgress) {
-  const context = await getContext();
-  if (!context) throw new Error('Browser context not available');
+  const tmp = tmpPath(destPath);
 
   if (playUrlData.type === 'mp4') {
-    return await downloadViaBrowserFetch(context, playUrlData.url, destPath, onProgress);
+    const result = await downloadFileNative(playUrlData.url, tmp, onProgress);
+    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+    fs.renameSync(tmp, destPath);
+    return { bytesTotal: result.bytesTotal, filePath: destPath };
   }
 
   if (playUrlData.type === 'dash') {
@@ -67,7 +104,10 @@ async function downloadBilibiliVideo(playUrlData, destPath, onProgress) {
       onProgress({ percent: 0, bytesDone: 0, bytesTotal: 0, speed: 0, eta: 0 });
     }
 
-    return await downloadViaBrowserFetch(context, videoUrl, destPath, onProgress);
+    const result = await downloadFileNative(videoUrl, tmp, onProgress);
+    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+    fs.renameSync(tmp, destPath);
+    return { bytesTotal: result.bytesTotal, filePath: destPath };
   }
 
   throw new Error('未知的播放地址格式');
