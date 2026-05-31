@@ -54,7 +54,7 @@ class ClipboardWatcher {
           return;
         }
 
-        const match = text.match(/(https?:\/\/(?:www\.)?(?:v\.)?douyin\.com\/\S+)/) || text.match(/(https?:\/\/(?:www\.)?bilibili\.com\/video\/\S+)/) || text.match(/(https?:\/\/b23\.tv\/\S+)/) || text.match(/(https?:\/\/space\.bilibili\.com\/\d+\/favlist\S+)/);
+        const match = text.match(/(https?:\/\/(?:www\.)?(?:v\.)?douyin\.com\/\S+)/) || text.match(/(https?:\/\/(?:www\.)?bilibili\.com\/video\/\S+)/) || text.match(/(https?:\/\/b23\.tv\/\S+)/) || text.match(/(https?:\/\/space\.bilibili\.com\/\d+\S*)/);
         if (!match) {
           this._timer = setTimeout(poll, 1500);
           return;
