@@ -387,6 +387,7 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
   if (!mid) throw new Error('无法从 URL 提取用户 ID');
 
   const allVideos = [];
+  let userName = '';
   let page = null;
 
   try {
@@ -406,12 +407,9 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
     await sleep(2000);
 
     // 获取UP主名字
-    let userName = '';
     try {
-      userName = await page.evaluate(() => {
-        const el = document.querySelector('.h-name') || document.querySelector('#h-name');
-        return el ? el.textContent.trim() : '';
-      });
+      const nameEl = await page.$('.h-name');
+      if (nameEl) userName = await nameEl.textContent() || '';
     } catch {}
     console.log('[bilibili-space] user:', userName);
 
@@ -424,29 +422,15 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
       if (isCancelled && isCancelled()) break;
 
       // 提取当前页面上的视频BV号
-      const videos = await page.evaluate(() => {
-        const results = [];
-        // 方法1: 从链接提取
-        document.querySelectorAll('a[href*="/video/BV"]').forEach(a => {
+      const links = await page.$$eval('a[href*="/video/BV"]', els => {
+        return els.map(a => {
           const match = a.href.match(/\/video\/(BV\w+)/);
-          if (match) {
-            const title = a.getAttribute('title') || a.textContent.trim();
-            results.push({ bvid: match[1], title: title.substring(0, 100) });
-          }
-        });
-        // 方法2: 从数据属性提取
-        document.querySelectorAll('[data-bvid], [data-aid]').forEach(el => {
-          const bvid = el.getAttribute('data-bvid');
-          if (bvid) {
-            const title = el.getAttribute('title') || el.textContent.trim();
-            results.push({ bvid, title: title.substring(0, 100) });
-          }
-        });
-        return results;
+          return match ? { bvid: match[1], title: (a.getAttribute('title') || a.textContent || '').trim().substring(0, 100) } : null;
+        }).filter(Boolean);
       });
 
       // 去重添加
-      for (const v of videos) {
+      for (const v of links) {
         if (v.bvid && !allVideos.find(x => x.bvid === v.bvid)) {
           allVideos.push({ bvid: v.bvid, title: v.title, author: userName });
         }
@@ -469,10 +453,7 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
       lastCount = allVideos.length;
 
       // 检查是否有下一页按钮（非禁用状态）
-      const hasNextPage = await page.evaluate(() => {
-        const nextBtn = document.querySelector('.be-pager-next:not(.be-pager-disabled)');
-        return !!nextBtn;
-      });
+      const hasNextPage = await page.$('.be-pager-next:not(.be-pager-disabled)');
 
       if (hasNextPage) {
         // 点击下一页
@@ -480,13 +461,11 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
           await page.click('.be-pager-next:not(.be-pager-disabled)');
           await sleep(2000);
         } catch {
-          // 如果点击失败，尝试滚动
-          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
           await sleep(1500);
         }
       } else {
-        // 没有下一页，尝试滚动加载
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
         await sleep(1500);
       }
 

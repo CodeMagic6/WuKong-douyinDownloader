@@ -99,7 +99,7 @@ class ClipboardWatcher {
 
   /** Async clipboard read via PowerShell — never blocks event loop */
   _getClipboardTextAsync(callback) {
-    const cmd1 = `powershell -NoProfile -STA -Command "Get-Clipboard -Raw -TextFormatType UnicodeText 2>$null; if (-not $?) { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::GetText() }"`;
+    const cmd1 = `powershell -NoProfile -STA -Command "Get-Clipboard -Raw"`;
 
     exec(cmd1, { encoding: 'utf-8', timeout: 3000, windowsHide: true }, (err, stdout) => {
       if (err) {
