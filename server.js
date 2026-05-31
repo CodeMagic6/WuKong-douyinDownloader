@@ -386,7 +386,7 @@ app.get('/api/ping', (req, res) => res.json({ ok: true }));
 // Open file in folder
 app.get('/api/open-file/:id', (req, res) => {
   try {
-    const item = queueManager.getItem(req.params.id);
+    const item = queue.getItem(req.params.id);
     if (!item || !item.filePath) {
       return res.status(404).json({ error: '文件不存在' });
     }
