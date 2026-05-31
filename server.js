@@ -393,8 +393,10 @@ app.get('/api/open-file/:id', (req, res) => {
     if (!fs.existsSync(item.filePath)) {
       return res.status(404).json({ error: '文件未找到' });
     }
-    // Windows: explorer /select,"path"
-    execSync(`explorer /select,"${item.filePath.replace(/\//g, '\\')}"`);
+    const winPath = item.filePath.replace(/\//g, '\\');
+    try {
+      execSync(`explorer /select,"${winPath}"`);
+    } catch {}
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
