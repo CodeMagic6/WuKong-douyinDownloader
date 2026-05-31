@@ -37,16 +37,18 @@ async function getWbiKeys() {
     
     // 从nav接口获取wbi keys
     const resp = await page.evaluate(async () => {
-      const r = await fetch('https://api.bilibili.com/x/web-interface/nav');
+      const r = await fetch('https://api.bilibili.com/x/web-interface/nav', { credentials: 'include' });
       return await r.json();
     });
     
     if (resp?.data?.wbi_img) {
       const imgUrl = resp.data.wbi_img.img_url;
       const subUrl = resp.data.wbi_img.sub_url;
-      const imgKey = imgUrl.substring(imgUrl.lastIndexOf('/') + 1, imgUrl.indexOf('.'));
-      const subKey = subUrl.substring(subUrl.lastIndexOf('/') + 1, subUrl.indexOf('.'));
+      // 提取文件名中的key: https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png -> 7cd084941338484aae1ad9425b84077c
+      const imgKey = imgUrl.split('/').pop().split('.')[0];
+      const subKey = subUrl.split('/').pop().split('.')[0];
       wbiImg = imgKey + subKey;
+      console.log('[wbi] keys:', wbiImg);
     }
     await page.close();
   } catch (e) {
@@ -61,6 +63,20 @@ function md5(str) {
 
 function encodeURL(str) {
   return encodeURIComponent(str).replace(/%20/g, '+');
+}
+
+// 生成浏览器指纹参数 (参考 BilibiliDown)
+function genDmImgParams() {
+  const dm_img_list = '[]';
+  const dm_img_str = btoa('webgl version:WebGL 1.0').slice(0, -2);
+  const width = 1920, height = 1080;
+  const t = Math.floor(Math.random() * 114);
+  const wh = [2*width + 2*height + 3*t, 4*width - height + t, t];
+  const t2 = Math.floor(Math.random() * 514);
+  const of = [3*width + 2*height + t2, 4*width - 4*height + 2*t2, t2];
+  const dm_img_inter = JSON.stringify({ds:[], wh, of});
+  const dm_cover_img_str = btoa('Google Inc. (Intel)').slice(0, -2);
+  return {dm_img_list, dm_img_str, dm_img_inter, dm_cover_img_str};
 }
 
 async function encWbi(url) {
@@ -92,6 +108,26 @@ async function encWbi(url) {
   
   const wbiSign = md5(paramEncodedSorted + mixinKey);
   return url + (questionIdx >= 0 ? '&' : '?') + 'w_rid=' + wbiSign + '&wts=' + wts;
+}
+
+// 用WBI签名构建完整的API URL
+async function buildWbiUrl(baseUrl, params = {}) {
+  const keys = await getWbiKeys();
+  if (!keys) return baseUrl;
+  
+  const mixinKey = getMixinKey(keys);
+  const wts = Math.floor(Date.now() / 1000);
+  
+  // 添加wts
+  params.wts = String(wts);
+  
+  // 编码并排序
+  const encodedParams = Object.entries(params).map(([k, v]) => encodeURL(k) + '=' + encodeURL(v));
+  encodedParams.sort();
+  const paramStr = encodedParams.join('&');
+  
+  const sign = md5(paramStr + mixinKey);
+  return baseUrl + '?' + paramStr + '&w_rid=' + sign;
 }
 
 function extractBvid(url) {
@@ -487,9 +523,12 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
       page = await ctx.newPage();
       await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
 
-      // 使用WBI签名的API
-      let apiUrl = `https://api.bilibili.com/x/space/wbi/arc/search?mid=${mid}&ps=${ps}&tid=0&pn=${pn}&keyword=&order=pubdate&platform=web`;
-      apiUrl = await encWbi(apiUrl);
+      // 使用WBI签名的API (添加dm_img指纹参数)
+      const dm = genDmImgParams();
+      const apiUrl = await buildWbiUrl('https://api.bilibili.com/x/space/wbi/arc/search', {
+        mid, ps: String(ps), tid: '0', pn: String(pn), keyword: '', order: 'pubdate', platform: 'web',
+        dm_img_list: dm.dm_img_list, dm_img_str: dm.dm_img_str, dm_img_inter: dm.dm_img_inter, dm_cover_img_str: dm.dm_cover_img_str
+      });
       
       const resp = await Promise.race([
         fetchJsonViaBrowser(page, apiUrl),
