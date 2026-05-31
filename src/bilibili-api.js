@@ -387,81 +387,117 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
   if (!mid) throw new Error('无法从 URL 提取用户 ID');
 
   const allVideos = [];
-  let userName = '';
-  let pn = 1;
-  const ps = 30;
-  let hasMore = true;
+  let page = null;
 
-  while (hasMore) {
-    if (isCancelled && isCancelled()) break;
-
-    let page = null;
+  try {
+    const ctx = await getContext();
+    if (!ctx) throw new Error('Browser context not available');
     try {
-      const ctx = await getContext();
-      if (!ctx) throw new Error('Browser context not available');
-      try {
-        const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
-        const cookies = JSON.parse(raw);
-        if (cookies.length > 0) await ctx.addCookies(cookies);
-      } catch {}
-      page = await ctx.newPage();
-      await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+      const cookies = JSON.parse(raw);
+      if (cookies.length > 0) await ctx.addCookies(cookies);
+    } catch {}
+    page = await ctx.newPage();
 
-      const apiUrl = `https://api.bilibili.com/x/space/wbi/arc/search?mid=${mid}&pn=${pn}&ps=${ps}&order=pubdate`;
-      const resp = await Promise.race([
-        fetchJsonViaBrowser(page, apiUrl),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('API 请求超时')), 15000))
-      ]);
+    // 直接访问UP主视频页
+    const spaceUrl = `https://space.bilibili.com/${mid}/video`;
+    console.log('[bilibili-space] navigating to:', spaceUrl);
+    await page.goto(spaceUrl, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+    await sleep(2000);
 
-      if (!resp || resp.code !== 0) {
-        throw new Error(`B站用户视频 API 错误: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
-      }
+    // 获取UP主名字
+    let userName = '';
+    try {
+      userName = await page.evaluate(() => {
+        const el = document.querySelector('.h-name') || document.querySelector('#h-name');
+        return el ? el.textContent.trim() : '';
+      });
+    } catch {}
+    console.log('[bilibili-space] user:', userName);
 
-      const data = resp.data;
-      if (!data) break;
+    // 滚动加载所有视频
+    let lastCount = 0;
+    let noNewCount = 0;
+    const maxScrolls = 100;
 
-      if (data.list && data.list.vlist && !userName) {
-        userName = data.list.vlist[0]?.author || '';
-      }
+    for (let scroll = 0; scroll < maxScrolls; scroll++) {
+      if (isCancelled && isCancelled()) break;
 
-      const vlist = data.page?.count > 0 ? (data.list?.vlist || []) : [];
-      if (vlist.length === 0) break;
-
-      let added = 0;
-      for (const v of vlist) {
-        if (v.bvid) {
-          if (!allVideos.find(x => x.bvid === v.bvid)) {
-            allVideos.push({
-              bvid: v.bvid,
-              title: (v.title || '').substring(0, 100),
-              author: v.author || userName
-            });
-            added++;
+      // 提取当前页面上的视频BV号
+      const videos = await page.evaluate(() => {
+        const results = [];
+        // 方法1: 从链接提取
+        document.querySelectorAll('a[href*="/video/BV"]').forEach(a => {
+          const match = a.href.match(/\/video\/(BV\w+)/);
+          if (match) {
+            const title = a.getAttribute('title') || a.textContent.trim();
+            results.push({ bvid: match[1], title: title.substring(0, 100) });
           }
+        });
+        // 方法2: 从数据属性提取
+        document.querySelectorAll('[data-bvid], [data-aid]').forEach(el => {
+          const bvid = el.getAttribute('data-bvid');
+          if (bvid) {
+            const title = el.getAttribute('title') || el.textContent.trim();
+            results.push({ bvid, title: title.substring(0, 100) });
+          }
+        });
+        return results;
+      });
+
+      // 去重添加
+      for (const v of videos) {
+        if (v.bvid && !allVideos.find(x => x.bvid === v.bvid)) {
+          allVideos.push({ bvid: v.bvid, title: v.title, author: userName });
         }
       }
 
       if (onProgress) {
-        onProgress({
-          phase: 'listing',
-          message: `正在获取视频列表...已找到 ${allVideos.length} 个`,
-          current: allVideos.length,
-          total: data.page?.count || 0
-        });
+        onProgress(allVideos.length, scroll + 1);
       }
 
-      const totalPages = Math.ceil((data.page?.count || 0) / ps);
-      hasMore = pn < totalPages && added > 0;
-      pn++;
+      // 检查是否有新视频
+      if (allVideos.length === lastCount) {
+        noNewCount++;
+        if (noNewCount >= 3) {
+          console.log('[bilibili-space] no new videos after 3 scrolls, stopping');
+          break;
+        }
+      } else {
+        noNewCount = 0;
+      }
+      lastCount = allVideos.length;
 
-      await sleep(500);
+      // 检查是否有下一页按钮（非禁用状态）
+      const hasNextPage = await page.evaluate(() => {
+        const nextBtn = document.querySelector('.be-pager-next:not(.be-pager-disabled)');
+        return !!nextBtn;
+      });
 
-    } catch (e) {
-      console.error('[bilibili-space] page', pn, 'error:', e.message);
-      hasMore = false;
-    } finally {
-      if (page) await page.close().catch(() => {});
+      if (hasNextPage) {
+        // 点击下一页
+        try {
+          await page.click('.be-pager-next:not(.be-pager-disabled)');
+          await sleep(2000);
+        } catch {
+          // 如果点击失败，尝试滚动
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await sleep(1500);
+        }
+      } else {
+        // 没有下一页，尝试滚动加载
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await sleep(1500);
+      }
+
+      console.log('[bilibili-space] scroll', scroll + 1, 'found:', allVideos.length);
     }
+
+  } catch (e) {
+    console.error('[bilibili-space] error:', e.message);
+    throw e;
+  } finally {
+    if (page) await page.close().catch(() => {});
   }
 
   console.log('[bilibili-space] done:', allVideos.length, 'user:', userName);
