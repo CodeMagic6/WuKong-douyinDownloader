@@ -348,10 +348,12 @@ function renderItem(item) {
     if (settings.saveMode === 'manual') {
       actionsHtml = `
         <button class="btn-icon download-btn" onclick="downloadFile('${item.id}')">保存</button>
+        <button class="btn-icon" onclick="openFileInFolder('${item.id}')">打开</button>
         <button class="btn-icon" onclick="removeItem('${item.id}')">删除</button>`;
     } else {
       actionsHtml = `
         <span class="item-status-text status-completed" style="margin-right:8px">已保存到目录</span>
+        <button class="btn-icon" onclick="openFileInFolder('${item.id}')">打开</button>
         <button class="btn-icon" onclick="removeItem('${item.id}')">删除</button>`;
     }
   }
@@ -472,6 +474,15 @@ function retryItem(id) {
     body: JSON.stringify({ urls: [item.url] })
   }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .catch(e => { if (serverOnline) alert('重试失败: ' + e.message); });
+}
+
+function openFileInFolder(id) {
+  fetch('/api/open-file/' + id)
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) alert('打开失败: ' + data.error);
+    })
+    .catch(e => alert('打开失败: ' + e.message));
 }
 
 function clearCompleted() {

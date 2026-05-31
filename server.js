@@ -383,6 +383,24 @@ app.post('/api/bilibili/login/cancel', (req, res) => {
 // Ping (health check)
 app.get('/api/ping', (req, res) => res.json({ ok: true }));
 
+// Open file in folder
+app.get('/api/open-file/:id', (req, res) => {
+  try {
+    const item = queueManager.getItem(req.params.id);
+    if (!item || !item.filePath) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+    if (!fs.existsSync(item.filePath)) {
+      return res.status(404).json({ error: '文件未找到' });
+    }
+    // Windows: explorer /select,"path"
+    execSync(`explorer /select,"${item.filePath.replace(/\//g, '\\')}"`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Status
 app.get('/api/status', (req, res) => {
   try {
