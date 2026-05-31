@@ -1,5 +1,6 @@
 const { getContext } = require('./browser');
 const { sleep } = require('./helpers');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -13,6 +14,85 @@ const HEADERS = {
   'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
   'Origin': 'https://www.bilibili.com'
 };
+
+// WBI签名相关
+const MixinArray = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52];
+let wbiImg = null;
+
+function getMixinKey(content) {
+  let sb = '';
+  for (let i = 0; i < 32; i++) {
+    sb += content.charAt(MixinArray[i]);
+  }
+  return sb;
+}
+
+async function getWbiKeys() {
+  if (wbiImg) return wbiImg;
+  try {
+    const ctx = await getContext();
+    if (!ctx) throw new Error('No context');
+    const page = await ctx.newPage();
+    await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+    
+    // 从nav接口获取wbi keys
+    const resp = await page.evaluate(async () => {
+      const r = await fetch('https://api.bilibili.com/x/web-interface/nav');
+      return await r.json();
+    });
+    
+    if (resp?.data?.wbi_img) {
+      const imgUrl = resp.data.wbi_img.img_url;
+      const subUrl = resp.data.wbi_img.sub_url;
+      const imgKey = imgUrl.substring(imgUrl.lastIndexOf('/') + 1, imgUrl.indexOf('.'));
+      const subKey = subUrl.substring(subUrl.lastIndexOf('/') + 1, subUrl.indexOf('.'));
+      wbiImg = imgKey + subKey;
+    }
+    await page.close();
+  } catch (e) {
+    console.error('[wbi] get keys error:', e.message);
+  }
+  return wbiImg;
+}
+
+function md5(str) {
+  return crypto.createHash('md5').update(str).digest('hex');
+}
+
+function encodeURL(str) {
+  return encodeURIComponent(str).replace(/%20/g, '+');
+}
+
+async function encWbi(url) {
+  const keys = await getWbiKeys();
+  if (!keys) return url;
+  
+  const mixinKey = getMixinKey(keys);
+  const wts = Math.floor(Date.now() / 1000);
+  
+  const questionIdx = url.indexOf('?');
+  let paramEncodedSorted;
+  let sep;
+  
+  if (questionIdx >= 0) {
+    let paramRaw = url.substring(questionIdx + 1);
+    sep = paramRaw ? '&' : '?';
+    paramRaw += sep + 'wts=' + wts;
+    
+    const params = paramRaw.split('&').map(p => {
+      const [key, ...vals] = p.split('=');
+      return encodeURL(key) + '=' + encodeURL(vals.join('='));
+    });
+    params.sort();
+    paramEncodedSorted = params.join('&');
+  } else {
+    sep = '?';
+    paramEncodedSorted = 'wts=' + wts;
+  }
+  
+  const wbiSign = md5(paramEncodedSorted + mixinKey);
+  return url + (questionIdx >= 0 ? '&' : '?') + 'w_rid=' + wbiSign + '&wts=' + wts;
+}
 
 function extractBvid(url) {
   if (!url || typeof url !== 'string') return null;
@@ -388,95 +468,79 @@ async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
 
   const allVideos = [];
   let userName = '';
-  let page = null;
+  let pn = 1;
+  const ps = 30;
+  let hasMore = true;
 
-  try {
-    const ctx = await getContext();
-    if (!ctx) throw new Error('Browser context not available');
+  while (hasMore) {
+    if (isCancelled && isCancelled()) break;
+
+    let page = null;
     try {
-      const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
-      const cookies = JSON.parse(raw);
-      if (cookies.length > 0) await ctx.addCookies(cookies);
-    } catch {}
-    page = await ctx.newPage();
+      const ctx = await getContext();
+      if (!ctx) throw new Error('Browser context not available');
+      try {
+        const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+        const cookies = JSON.parse(raw);
+        if (cookies.length > 0) await ctx.addCookies(cookies);
+      } catch {}
+      page = await ctx.newPage();
+      await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
 
-    // 直接访问UP主视频页
-    const spaceUrl = `https://space.bilibili.com/${mid}/video`;
-    console.log('[bilibili-space] navigating to:', spaceUrl);
-    await page.goto(spaceUrl, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
-    await sleep(2000);
+      // 使用WBI签名的API
+      let apiUrl = `https://api.bilibili.com/x/space/wbi/arc/search?mid=${mid}&ps=${ps}&tid=0&pn=${pn}&keyword=&order=pubdate&platform=web`;
+      apiUrl = await encWbi(apiUrl);
+      
+      const resp = await Promise.race([
+        fetchJsonViaBrowser(page, apiUrl),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('API 请求超时')), 15000))
+      ]);
 
-    // 获取UP主名字
-    try {
-      const nameEl = await page.$('.h-name');
-      if (nameEl) userName = await nameEl.textContent() || '';
-    } catch {}
-    console.log('[bilibili-space] user:', userName);
+      if (!resp || resp.code !== 0) {
+        throw new Error(`B站用户视频 API 错误: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
+      }
 
-    // 滚动加载所有视频
-    let lastCount = 0;
-    let noNewCount = 0;
-    const maxScrolls = 100;
+      const data = resp.data;
+      if (!data) break;
 
-    for (let scroll = 0; scroll < maxScrolls; scroll++) {
-      if (isCancelled && isCancelled()) break;
+      if (data.list && data.list.vlist && !userName && data.list.vlist.length > 0) {
+        userName = data.list.vlist[0]?.author || '';
+      }
 
-      // 提取当前页面上的视频BV号
-      const links = await page.$$eval('a[href*="/video/BV"]', els => {
-        return els.map(a => {
-          const match = a.href.match(/\/video\/(BV\w+)/);
-          return match ? { bvid: match[1], title: (a.getAttribute('title') || a.textContent || '').trim().substring(0, 100) } : null;
-        }).filter(Boolean);
-      });
+      const vlist = data.list?.vlist || [];
+      if (vlist.length === 0) break;
 
-      // 去重添加
-      for (const v of links) {
-        if (v.bvid && !allVideos.find(x => x.bvid === v.bvid)) {
-          allVideos.push({ bvid: v.bvid, title: v.title, author: userName });
+      let added = 0;
+      for (const v of vlist) {
+        if (v.bvid) {
+          if (!allVideos.find(x => x.bvid === v.bvid)) {
+            allVideos.push({
+              bvid: v.bvid,
+              title: (v.title || '').substring(0, 100),
+              author: v.author || userName
+            });
+            added++;
+          }
         }
       }
 
       if (onProgress) {
-        onProgress(allVideos.length, scroll + 1);
+        onProgress(allVideos.length, pn);
       }
 
-      // 检查是否有新视频
-      if (allVideos.length === lastCount) {
-        noNewCount++;
-        if (noNewCount >= 3) {
-          console.log('[bilibili-space] no new videos after 3 scrolls, stopping');
-          break;
-        }
-      } else {
-        noNewCount = 0;
-      }
-      lastCount = allVideos.length;
+      const totalPages = Math.ceil((data.page?.count || 0) / ps);
+      hasMore = pn < totalPages && added > 0;
+      pn++;
 
-      // 检查是否有下一页按钮（非禁用状态）
-      const hasNextPage = await page.$('.be-pager-next:not(.be-pager-disabled)');
+      console.log('[bilibili-space] page', pn - 1, 'added:', added, 'total:', allVideos.length);
+      await sleep(800);
 
-      if (hasNextPage) {
-        // 点击下一页
-        try {
-          await page.click('.be-pager-next:not(.be-pager-disabled)');
-          await sleep(2000);
-        } catch {
-          await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
-          await sleep(1500);
-        }
-      } else {
-        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
-        await sleep(1500);
-      }
-
-      console.log('[bilibili-space] scroll', scroll + 1, 'found:', allVideos.length);
+    } catch (e) {
+      console.error('[bilibili-space] page', pn, 'error:', e.message);
+      hasMore = false;
+    } finally {
+      if (page) await page.close().catch(() => {});
     }
-
-  } catch (e) {
-    console.error('[bilibili-space] error:', e.message);
-    throw e;
-  } finally {
-    if (page) await page.close().catch(() => {});
   }
 
   console.log('[bilibili-space] done:', allVideos.length, 'user:', userName);
