@@ -6,7 +6,7 @@ const { extractAwemeId, resolveShortUrl, isCollectionUrl, getCollectionLabel, is
 const { extractVideoMetadata, getBestVideoUrl } = require('./video-api');
 const { downloadWithRetry } = require('./download-engine');
 const { makeFilename } = require('./filename-utils');
-const { getVideoDownloadUrls, isBilibiliCollectionUrl, extractBilibiliCollectionWithProgress } = require('./bilibili-api');
+const { getVideoDownloadUrls, parseBilibiliUrl, extractBilibiliCollectionWithProgress, extractBilibiliSpaceWithProgress } = require('./bilibili-api');
 const { downloadBilibiliVideo } = require('./bilibili-download');
 const { sleep } = require('./helpers');
 const { extractCollectionWithProgress } = require('./collection-extractor');
@@ -88,37 +88,71 @@ class QueueManager {
         };
         this.items.push(placeholder);
         results.push({ id: placeholder.id, url, status: 'pending', isCollection: true, label });
-      } else if (isBilibiliCollectionUrl(url)) {
-        // Bilibili collection
-        const placeholder = {
-          id: uid(),
-          url,
-          awemeId: '',
-          bvid: '',
-          isBilibili: true,
-          status: 'pending',
-          progress: 0,
-          speedBytesPerSec: 0,
-          etaSec: 0,
-          bytesDone: 0,
-          bytesTotal: 0,
-          filename: '',
-          filePath: '',
-          error: '',
-          createdAt: Date.now(),
-          startedAt: null,
-          completedAt: null,
-          retryCount: 0,
-          metadata: null,
-          isCollection: true,
-          isBilibiliCollection: true,
-          collectionLabel: 'B站合集',
-          collectionFound: 0
-        };
-        this.items.push(placeholder);
-        results.push({ id: placeholder.id, url, status: 'pending', isCollection: true, label: 'B站合集' });
       } else {
-        results.push(this._addSingleItem(url));
+        // 统一处理所有B站链接
+        const biliInfo = parseBilibiliUrl(url);
+        
+        if (biliInfo.type === 'collection') {
+          // B站收藏夹
+          const placeholder = {
+            id: uid(),
+            url,
+            awemeId: '',
+            bvid: '',
+            isBilibili: true,
+            status: 'pending',
+            progress: 0,
+            speedBytesPerSec: 0,
+            etaSec: 0,
+            bytesDone: 0,
+            bytesTotal: 0,
+            filename: '',
+            filePath: '',
+            error: '',
+            createdAt: Date.now(),
+            startedAt: null,
+            completedAt: null,
+            retryCount: 0,
+            metadata: null,
+            isCollection: true,
+            isBilibiliCollection: true,
+            collectionLabel: 'B站合集',
+            collectionFound: 0
+          };
+          this.items.push(placeholder);
+          results.push({ id: placeholder.id, url, status: 'pending', isCollection: true, label: 'B站合集' });
+        } else if (biliInfo.type === 'space') {
+          // UP主视频页
+          const placeholder = {
+            id: uid(),
+            url,
+            awemeId: '',
+            bvid: '',
+            isBilibili: true,
+            status: 'pending',
+            progress: 0,
+            speedBytesPerSec: 0,
+            etaSec: 0,
+            bytesDone: 0,
+            bytesTotal: 0,
+            filename: '',
+            filePath: '',
+            error: '',
+            createdAt: Date.now(),
+            startedAt: null,
+            completedAt: null,
+            retryCount: 0,
+            metadata: null,
+            isCollection: true,
+            isBilibiliSpace: true,
+            collectionLabel: 'UP主视频',
+            collectionFound: 0
+          };
+          this.items.push(placeholder);
+          results.push({ id: placeholder.id, url, status: 'pending', isCollection: true, label: 'UP主视频' });
+        } else {
+          results.push(this._addSingleItem(url));
+        }
       }
     }
     this._broadcastQueue();
@@ -214,13 +248,14 @@ class QueueManager {
 
   async _processItem(item) {
     // === Bilibili Collection handling ===
-    if (item.isBilibiliCollection) {
-      const label = item.collectionLabel || 'B站合集';
+    if (item.isBilibiliCollection || item.isBilibiliSpace) {
+      const label = item.collectionLabel || (item.isBilibiliSpace ? 'UP主视频' : 'B站合集');
       item.status = 'extracting';
       this._broadcastQueue();
 
       try {
-        const result = await extractBilibiliCollectionWithProgress(
+        const extractFn = item.isBilibiliSpace ? extractBilibiliSpaceWithProgress : extractBilibiliCollectionWithProgress;
+        const result = await extractFn(
           item.url,
           (found, attempt) => {
             item.collectionFound = found;
@@ -241,7 +276,7 @@ class QueueManager {
 
         if (item._cancelled) return;
         if (videoIds.length === 0) {
-          return this._failItem(item, '未从B站合集中找到任何视频');
+          return this._failItem(item, `未从${label}中找到任何视频`);
         }
 
         // Remove placeholder item
@@ -256,7 +291,7 @@ class QueueManager {
             fs.mkdirSync(collectionFolder, { recursive: true });
           }
         } catch (e) {
-          console.error('[queue] 创建B站合集文件夹失败:', e.message);
+          console.error('[queue] 创建文件夹失败:', e.message);
         }
 
         // Add individual video items
@@ -276,7 +311,7 @@ class QueueManager {
         this._broadcastQueue();
         setImmediate(() => this._processQueue());
       } catch (e) {
-        return this._failItem(item, `B站合集解析失败: ${e.message}`);
+        return this._failItem(item, `${label}解析失败: ${e.message}`);
       }
       return;
     }
@@ -595,6 +630,7 @@ class QueueManager {
         retryCount: i.retryCount,
         isCollection: !!i.isCollection,
         isBilibiliCollection: !!i.isBilibiliCollection,
+        isBilibiliSpace: !!i.isBilibiliSpace,
         collectionLabel: i.collectionLabel,
         collectionFound: i.collectionFound,
         collectionFolder: i.collectionFolder || '',

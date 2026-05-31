@@ -254,6 +254,47 @@ function isBilibiliCollectionUrl(url) {
   return /space\.bilibili\.com\/\d+\/favlist/i.test(url);
 }
 
+function isBilibiliSpaceUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return /space\.bilibili\.com\/\d+\/video/i.test(url);
+}
+
+function parseBilibiliSpaceUrl(url) {
+  const midMatch = url.match(/space\.bilibili\.com\/(\d+)/);
+  return midMatch ? midMatch[1] : null;
+}
+
+// 通用B站URL解析器：自动识别单视频、收藏夹、UP主视频页
+function parseBilibiliUrl(url) {
+  if (!url || typeof url !== 'string') return { type: 'unknown' };
+  const trimmed = url.trim();
+  
+  // 单视频: BV... 或 av... 或 bilibili.com/video/...
+  const bvid = extractBvid(trimmed);
+  if (bvid) return { type: 'video', bvid };
+  
+  // 收藏夹: space.bilibili.com/mid/favlist?fid=xxx
+  if (/space\.bilibili\.com\/\d+\/favlist/i.test(trimmed)) {
+    const mid = trimmed.match(/space\.bilibili\.com\/(\d+)/)?.[1];
+    const fid = trimmed.match(/fid=(\d+)/)?.[1];
+    return { type: 'collection', mid, fid };
+  }
+  
+  // UP主视频页: space.bilibili.com/mid/video
+  if (/space\.bilibili\.com\/\d+\/video/i.test(trimmed)) {
+    const mid = trimmed.match(/space\.bilibili\.com\/(\d+)/)?.[1];
+    return { type: 'space', mid };
+  }
+  
+  // 通用space页面: space.bilibili.com/mid (默认当UP主视频)
+  if (/space\.bilibili\.com\/\d+/i.test(trimmed)) {
+    const mid = trimmed.match(/space\.bilibili\.com\/(\d+)/)?.[1];
+    return { type: 'space', mid };
+  }
+  
+  return { type: 'unknown' };
+}
+
 function parseBilibiliCollectionUrl(url) {
   const fidMatch = url.match(/fid=(\d+)/);
   const midMatch = url.match(/space\.bilibili\.com\/(\d+)/);
@@ -341,6 +382,92 @@ async function extractBilibiliCollectionWithProgress(url, onProgress, isCancelle
   return { videos: allVideos, title: collectionTitle };
 }
 
+async function extractBilibiliSpaceWithProgress(url, onProgress, isCancelled) {
+  const mid = parseBilibiliSpaceUrl(url);
+  if (!mid) throw new Error('无法从 URL 提取用户 ID');
+
+  const allVideos = [];
+  let userName = '';
+  let pn = 1;
+  const ps = 30;
+  let hasMore = true;
+
+  while (hasMore) {
+    if (isCancelled && isCancelled()) break;
+
+    let page = null;
+    try {
+      const ctx = await getContext();
+      if (!ctx) throw new Error('Browser context not available');
+      try {
+        const raw = fs.readFileSync(bilibiliCookieFile, 'utf-8');
+        const cookies = JSON.parse(raw);
+        if (cookies.length > 0) await ctx.addCookies(cookies);
+      } catch {}
+      page = await ctx.newPage();
+      await page.goto('https://www.bilibili.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+
+      const apiUrl = `https://api.bilibili.com/x/space/wbi/arc/search?mid=${mid}&pn=${pn}&ps=${ps}&order=pubdate`;
+      const resp = await Promise.race([
+        fetchJsonViaBrowser(page, apiUrl),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('API 请求超时')), 15000))
+      ]);
+
+      if (!resp || resp.code !== 0) {
+        throw new Error(`B站用户视频 API 错误: ${resp?.message || '未知错误'} (code: ${resp?.code})`);
+      }
+
+      const data = resp.data;
+      if (!data) break;
+
+      if (data.list && data.list.vlist && !userName) {
+        userName = data.list.vlist[0]?.author || '';
+      }
+
+      const vlist = data.page?.count > 0 ? (data.list?.vlist || []) : [];
+      if (vlist.length === 0) break;
+
+      let added = 0;
+      for (const v of vlist) {
+        if (v.bvid) {
+          if (!allVideos.find(x => x.bvid === v.bvid)) {
+            allVideos.push({
+              bvid: v.bvid,
+              title: (v.title || '').substring(0, 100),
+              author: v.author || userName
+            });
+            added++;
+          }
+        }
+      }
+
+      if (onProgress) {
+        onProgress({
+          phase: 'listing',
+          message: `正在获取视频列表...已找到 ${allVideos.length} 个`,
+          current: allVideos.length,
+          total: data.page?.count || 0
+        });
+      }
+
+      const totalPages = Math.ceil((data.page?.count || 0) / ps);
+      hasMore = pn < totalPages && added > 0;
+      pn++;
+
+      await sleep(500);
+
+    } catch (e) {
+      console.error('[bilibili-space] page', pn, 'error:', e.message);
+      hasMore = false;
+    } finally {
+      if (page) await page.close().catch(() => {});
+    }
+  }
+
+  console.log('[bilibili-space] done:', allVideos.length, 'user:', userName);
+  return { videos: allVideos, title: userName || 'UP主视频' };
+}
+
 module.exports = {
   extractBvid,
   isBilibiliUrl,
@@ -348,6 +475,7 @@ module.exports = {
   fetchPlayUrl,
   getVideoDownloadUrls,
   closeBilibiliPage,
-  isBilibiliCollectionUrl,
-  extractBilibiliCollectionWithProgress
+  parseBilibiliUrl,
+  extractBilibiliCollectionWithProgress,
+  extractBilibiliSpaceWithProgress
 };
