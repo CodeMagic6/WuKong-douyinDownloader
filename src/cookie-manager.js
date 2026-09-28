@@ -1,4 +1,6 @@
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const SESSION_KEYS = ['sessionid', 'sessionid_ss'];
 
@@ -38,6 +40,27 @@ async function checkLogin(context) {
   }
 }
 
+async function clearCookiesFor(context, url) {
+  try {
+    const cookies = await context.cookies(url);
+    if (cookies.length === 0) return 0;
+    const past = Math.floor(Date.now() / 1000) - 86400;
+    await context.addCookies(cookies.map(c => ({ ...c, expires: past })));
+    return cookies.length;
+  } catch {
+    return 0;
+  }
+}
+
+function deleteCookieFile(cookieFile) {
+  try {
+    if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function getCookieHeader(context) {
   try {
     const cookies = await context.cookies();
@@ -50,4 +73,24 @@ async function getCookieHeader(context) {
   }
 }
 
-module.exports = { loadCookies, saveCookies, checkLogin, getCookieHeader };
+module.exports = { loadCookies, saveCookies, checkLogin, getCookieHeader, clearCookiesFor, deleteCookieFile };
+
+if (require.main === module) {
+  const assert = require('assert');
+  const tmp = path.join(os.tmpdir(), 'cookie-manager-selfcheck.json');
+  fs.writeFileSync(tmp, '[]');
+  deleteCookieFile(tmp);
+  assert.strictEqual(fs.existsSync(tmp), false, 'deleteCookieFile should remove file');
+
+  (async () => {
+    let added = null;
+    const fake = {
+      cookies: async () => [{ name: 'sessionid', value: 'x', domain: '.douyin.com', path: '/' }],
+      addCookies: async (c) => { added = c; }
+    };
+    const n = await clearCookiesFor(fake, 'https://www.douyin.com/');
+    assert.strictEqual(n, 1, 'should expire 1 cookie');
+    assert.ok(added[0].expires < Math.floor(Date.now() / 1000), 'expires must be in the past');
+    console.log('cookie-manager self-check OK');
+  })().catch(e => { console.error(e); process.exit(1); });
+}

@@ -434,6 +434,18 @@ body {
 .badge-ok { background: #23863620; color: #3fb950; border: 1px solid #23863640; }
 .badge-fail { background: #da363320; color: #f85149; border: 1px solid #da363340; }
 .badge-warn { background: #d2992220; color: #d29922; border: 1px solid #d2992240; }
+.badge-clear {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #8b949e;
+  border: 1px solid #30363d;
+  background: transparent;
+}
+.badge-clear:hover { color: #f85149; border-color: #f8514960; background: #da363320; }
 
 /* Login Modal */
 .modal-overlay {
