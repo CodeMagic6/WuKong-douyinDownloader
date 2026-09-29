@@ -8,3 +8,4 @@ queue_*.json
 queue.json
 .env
 settings.json
+.codegraph/
