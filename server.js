@@ -2,6 +2,10 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
+
+// 打包版: 使用随软件附带的 Chromium (dist/ms-playwright)，免去首次运行联网下载
+const _bundledBrowsers = path.join(path.dirname(process.execPath), 'ms-playwright');
+if (fs.existsSync(_bundledBrowsers)) process.env.PLAYWRIGHT_BROWSERS_PATH = _bundledBrowsers;
 const config = require('./config');
 const SSEBroadcaster = require('./src/sse');
 const QueueManager = require('./src/queue-manager');

@@ -66,6 +66,7 @@ async function _initBrowser(headless) {
 
   browser = await chromium.launch({
     headless,
+    channel: 'chromium', // 用完整 Chromium 跑无头，避免额外打包 headless-shell (~270MB)
     args: config.browserArgs
   });
 
