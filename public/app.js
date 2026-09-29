@@ -215,11 +215,11 @@ function updateStatusBar() {
     : '<span class="badge badge-fail">未连接</span>'}`;
 
   cookie.innerHTML = `抖音: ${statusInfo.cookieValid
-    ? '<span class="badge badge-ok">已登录</span> <span class="badge-clear" onclick="clearLogin(\'douyin\')" title="清除抖音登录 Cookie">清除</span>'
+    ? '<span class="badge badge-ok">已登录</span>'
     : '<span class="badge badge-warn" style="cursor:pointer" onclick="startLogin()">未登录</span>'}`;
 
   bilibiliCookie.innerHTML = `B站: ${statusInfo.bilibiliCookieValid
-    ? '<span class="badge badge-ok">已登录</span> <span class="badge-clear" onclick="clearLogin(\'bilibili\')" title="清除B站登录 Cookie">清除</span>'
+    ? '<span class="badge badge-ok">已登录</span>'
     : '<span class="badge badge-warn" style="cursor:pointer" onclick="startBilibiliLogin()">未登录</span>'}`;
 
   queue.textContent = `队列: ${statusInfo.queueLength || 0}`;
@@ -700,21 +700,6 @@ function escapeHtml(str) {
 }
 
 // ---------- Login ----------
-function clearLogin(type) {
-  const isBili = type === 'bilibili';
-  const name = isBili ? 'B站' : '抖音';
-  if (!confirm(`确定清除${name}登录吗？清除后需重新扫码登录。`)) return;
-  const url = isBili ? '/api/bilibili/logout' : '/api/logout';
-  fetch(url, { method: 'POST' })
-    .then(r => r.json())
-    .then(() => {
-      if (isBili) statusInfo.bilibiliCookieValid = false;
-      else statusInfo.cookieValid = false;
-      updateStatusBar();
-    })
-    .catch(e => alert('清除失败: ' + e.message));
-}
-
 function setupLoginClick() {
   const cookieEl = $('#status-cookie');
   if (cookieEl) {

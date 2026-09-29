@@ -19,7 +19,7 @@ try { execSync('reg add HKCU\\Console /v QuickEdit /t REG_DWORD /d 0 /f', { stdi
 const { initBrowser, closeBrowser, restartBrowser, getPage, getContext, checkBrowserHealth } = require('./src/browser');
 const { closeApiPage } = require('./src/video-api');
 const { closeBilibiliPage } = require('./src/bilibili-api');
-const { checkLogin, clearCookiesFor, deleteCookieFile } = require('./src/cookie-manager');
+const { checkLogin } = require('./src/cookie-manager');
 const { loadPlaywright } = require('./src/playwright-loader');
 const ClipboardWatcher = require('./src/clipboard-watcher');
 
@@ -377,31 +377,6 @@ app.post('/api/bilibili/login/cancel', (req, res) => {
     bilibiliLoginInProgress = false;
   }
   res.json({ status: 'cancelled' });
-});
-
-// ---------- Clear login (logout) ----------
-app.post('/api/logout', async (req, res) => {
-  try {
-    const ctx = await getContext();
-    if (ctx) await clearCookiesFor(ctx, 'https://www.douyin.com/');
-  } catch {}
-  deleteCookieFile(config.cookieFile);
-  cookieValid = false;
-  sse.broadcast('status_update', { cookieValid: false });
-  console.log('已清除抖音登录 Cookie');
-  res.json({ ok: true });
-});
-
-app.post('/api/bilibili/logout', async (req, res) => {
-  try { await closeBilibiliPage(); } catch {}
-  try {
-    const ctx = await getContext();
-    if (ctx) await clearCookiesFor(ctx, 'https://www.bilibili.com/');
-  } catch {}
-  deleteCookieFile(config.bilibiliCookieFile);
-  sse.broadcast('status_update', { bilibiliCookieValid: false });
-  console.log('已清除B站登录 Cookie');
-  res.json({ ok: true });
 });
 // ---------- End login flow ----------
 
