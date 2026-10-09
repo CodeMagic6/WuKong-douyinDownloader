@@ -5,6 +5,7 @@
 ## 快速上手
 
 ## 事前准备
+```
 1，搜索：nodejs，官网下载安装.
 2，搜索：git，官网下载安装.
 3，打开git bash，输入npm install playwright.
@@ -14,6 +15,7 @@
 7，确认无误后，打开git bash，输入npm run build。
 8，目录下会多出一个dist文件夹，里面有douyin-download.exe
 9，打开，点击上方扫码即可。
+```
 
 ### 1. 下载项目
 
